@@ -55,7 +55,7 @@
 
 팀명**cloud-mlops-team-7 (7팀)**  
  예측하려는 시점**영화의 메타데이터(개봉일, 줄거리, 인기도, 투표수 등)가 주어졌을 때 평균 평점(vote_average)을 예측. 단, popularity·vote_count는 평점과 같은 시점에 쌓이는 값이므로, "개봉 직후(투표가 거의 없는 시점)"를 예측 목표로 할지 "어느 정도 투표가 쌓인 시점"을 예측 목표로 할지는 아직 팀이 확정하지 않음(현재 코드는 `USE_VOTE_FEATURES=True`로 두 값을 입력에 포함 중)**  
- 입력과 단위**release_year(개봉 연도)·release_month(개봉 월)·log_popularity(인기도 로그값)·log_vote_count(투표수 로그값)·overview(줄거리 텍스트)**  
+ 입력과 단위**release_year(개봉 연도)·release_month(개봉 월)·log_popularity(인기도 로그값)·log_vote_count(투표수 로그값)·overview(줄거리 텍스트). `predict.py`에서 예외처리·범위(길이) 검증을 추가함: release_year는 1870~2100, release_month는 1~12, popularity·vote_count는 0 이상, overview 글자 수는 1~5,000자여야 하며 벗어나면 예측 전에 거부됨. 모델 파일이 없거나 손상된 경우, 예측 도중 오류가 나는 경우도 각각 예외처리로 잡아 오류 메시지를 반환함**  
  예상 결과와 단위**vote_average, 0~10점 척도의 평균 평점 예측치(소수)**  
  실제 정답을 얻는 방법**원본 `top_rated_movies.csv`의 `vote_average` 열 — 실제 사용자들이 매긴 평균 평점**  
  단순 비교 기준**평균값 기준선(DummyRegressor, strategy=mean). 동일한 학습/평가 분할로 다시 계산한 결과 평가셋 MAE 0.5561점**  
@@ -68,8 +68,11 @@
 | 상황 | 실행 결과 | 원인과 고칠 곳 | 수정 후 확인할 증거 |
 |---|---|---|---|
 | 정상 입력 | `python predict.py --input inputs/normal.json` → `vote_average_pred: 6.905`, 정상 종료(exit 0) | 해당 없음 | 예측값이 `vote_average_predictions.csv`의 실제값(대략 5~8점대) 범위 안에 있는지 확인 — 확인됨 |
-| 잘못된 입력 | `python predict.py --input inputs/bad.json`(popularity에 "많음" 입력) → `{"error": "'popularity' 값이 숫자가 아닙니다: '많음'"}`, exit 1 | `predict.py`의 숫자 변환 단계에서 걸러짐(현재는 팀이 직접 만든 검증) | 다른 필수 값 누락 케이스(overview 빈 문자열, release_month 누락)도 같은 방식으로 막히는지 추가 실행 필요 |
-| 모델 준비 실패 | `python predict.py --input inputs/normal.json --model models/no-such-file.joblib` → `{"error": "모델 파일을 찾을 수 없습니다: models\\no-such-file.joblib"}`, exit 1 | 모델 경로가 존재하지 않을 때 `FileNotFoundError` 대신 명시적 에러 메시지로 처리하도록 `predict.py`에 직접 구현함 | 올바른 경로(`models/vote_average_model.joblib`)로 되돌리면 다시 정상 예측이 나오는지 확인 — 확인됨 |
+| 잘못된 입력(타입) | `python predict.py --input inputs/bad.json`(popularity에 "많음" 입력) → `{"error": "입력 오류: 'popularity' 값이 숫자가 아닙니다: '많음'"}`, exit 1 | `load_input()`의 숫자 변환 단계에서 걸러짐 | - |
+| 잘못된 입력(범위 밖) | `python predict.py --input inputs/out-of-range.json`(release_month=13) → `{"error": "입력 오류: 'release_month'는 1~12여야 합니다: 13.0"}`, exit 1 | `load_input()`에 range/length 검증(release_year·release_month·popularity·vote_count·overview 길이) 추가로 구현 | 정상 범위 값으로 고치면 다시 정상 예측이 나오는지 확인 — 확인됨(정상 입력 행 참고) |
+| 잘못된 입력(필수 값 누락) | `python predict.py --input inputs/empty-overview.json`(overview="") → `{"error": "입력 오류: 필수 입력 누락: ['overview']"}`, exit 1 | 빈 문자열도 누락으로 처리하도록 `load_input()`에 구현 | overview를 채우면 정상 예측되는지 확인 필요(추가 실행 가능) |
+| 모델 준비 실패(경로 없음) | `python predict.py --input inputs/normal.json --model models/no-such-file.joblib` → `{"error": "모델 파일을 찾을 수 없습니다: models\\no-such-file.joblib"}`, exit 1 | 모델 경로가 존재하지 않을 때 `FileNotFoundError` 대신 명시적 에러 메시지로 처리하도록 `predict.py`에 직접 구현함 | 올바른 경로(`models/vote_average_model.joblib`)로 되돌리면 다시 정상 예측이 나오는지 확인 — 확인됨 |
+| 모델 준비 실패(파일 손상) | 임의로 깨진 텍스트를 `models/broken.joblib`에 넣고 `python predict.py --input inputs/normal.json --model models/broken.joblib` 실행 → `{"error": "모델 파일이 손상되었거나 형식이 다릅니다: pop from empty list"}`, exit 1. (처음엔 `IndexError`가 그대로 튀어나와 스택트레이스가 노출됐는데, `joblib.load` 구간을 `try/except Exception`으로 감싸 사용자용 오류 메시지로 바꿈) | `joblib.load()`가 던지는 예외 종류(피클 관련이라 `IndexError`·`EOFError` 등 다양함)를 예측할 수 없어 `except Exception`으로 넓게 잡음 — 외부 파일 입력 경계라 정당화됨 | 정상 모델 파일로 교체하면 다시 정상 예측이 나오는지 확인 — 확인됨 |
 | 응답 성공·예측 오차 큼 | `python predict.py --input inputs/high-error-case.json`(실제 "The Gangster, the Cop, the Devil"의 개봉일·인기도·투표수·줄거리 입력) → `vote_average_pred: 6.671`, 실제 정답 7.843, 오차 −1.172. `vote_average_predictions.csv`의 값과 정확히 일치해 재현성 확인됨 | 줄거리(overview) 텍스트만으로 설명하기 어려운 평점 편차로 추정, 학습 자료에 유사 사례 부족 | 오차가 큰 표본들을 더 모아 공통된 특징(장르, 언어, 연도 등)이 있는지 분석 필요(아직 미완료) |
 
 ## 6. 동료 문서 수정 제안

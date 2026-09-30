@@ -27,6 +27,9 @@ DEFAULT_MODEL_PATH = BASE_DIR / "models" / "vote_average_model.joblib"
 
 REQUIRED_FIELDS = ["release_year", "release_month", "popularity", "vote_count", "overview"]
 
+MIN_YEAR, MAX_YEAR = 1870, 2100
+MIN_OVERVIEW_LEN, MAX_OVERVIEW_LEN = 1, 5000
+
 
 def load_input(path: Path) -> dict:
     with open(path, encoding="utf-8") as f:
@@ -41,6 +44,21 @@ def load_input(path: Path) -> dict:
             data[k] = float(data[k])
         except (TypeError, ValueError):
             raise ValueError(f"'{k}' 값이 숫자가 아닙니다: {data[k]!r}")
+
+    if not (MIN_YEAR <= data["release_year"] <= MAX_YEAR):
+        raise ValueError(f"'release_year' 범위를 벗어남({MIN_YEAR}~{MAX_YEAR}): {data['release_year']}")
+    if not (1 <= data["release_month"] <= 12):
+        raise ValueError(f"'release_month'는 1~12여야 합니다: {data['release_month']}")
+    if data["popularity"] < 0:
+        raise ValueError(f"'popularity'는 음수일 수 없습니다: {data['popularity']}")
+    if data["vote_count"] < 0:
+        raise ValueError(f"'vote_count'는 음수일 수 없습니다: {data['vote_count']}")
+
+    overview_len = len(str(data["overview"]))
+    if not (MIN_OVERVIEW_LEN <= overview_len <= MAX_OVERVIEW_LEN):
+        raise ValueError(
+            f"'overview' 글자 수가 범위를 벗어남({MIN_OVERVIEW_LEN}~{MAX_OVERVIEW_LEN}자): {overview_len}자"
+        )
 
     return data
 
@@ -58,13 +76,20 @@ def main():
 
     try:
         data = load_input(Path(args.input))
-    except ValueError as e:
-        print(json.dumps({"error": str(e)}, ensure_ascii=False))
+    except (ValueError, json.JSONDecodeError) as e:
+        print(json.dumps({"error": f"입력 오류: {e}"}, ensure_ascii=False))
+        sys.exit(1)
+    except OSError as e:
+        print(json.dumps({"error": f"입력 파일을 읽을 수 없습니다: {e}"}, ensure_ascii=False))
         sys.exit(1)
 
-    saved = joblib.load(model_path)
-    model = saved["model"]
-    features = saved["features"]
+    try:
+        saved = joblib.load(model_path)
+        model = saved["model"]
+        features = saved["features"]
+    except Exception as e:
+        print(json.dumps({"error": f"모델 파일이 손상되었거나 형식이 다릅니다: {e}"}, ensure_ascii=False))
+        sys.exit(1)
 
     row = {
         "release_year": data["release_year"],
@@ -73,9 +98,14 @@ def main():
         "log_vote_count": np.log1p(data["vote_count"]),
         "overview": data["overview"],
     }
-    X = pd.DataFrame([row])[features]
 
-    pred = model.predict(X)[0]
+    try:
+        X = pd.DataFrame([row])[features]
+        pred = model.predict(X)[0]
+    except Exception as e:
+        print(json.dumps({"error": f"예측 중 오류: {e}"}, ensure_ascii=False))
+        sys.exit(1)
+
     print(json.dumps({
         "model_name": saved["name"],
         "input": data,
