@@ -63,12 +63,14 @@
  함수·HTTP(웹 요청·응답 통신 규약)·배치 중 필요한 방식과 이유**아직 팀 내 확정 전. 사용자가 영화 정보를 입력하면 그 자리에서 결과를 바로 보는 형태라면 HTTP 방식이 맞고, 대량의 영화 데이터를 한 번에 채점하는 용도라면 배치가 맞음 — 서비스 형태에 따라 팀이 정해야 함**  
  아직 확인하지 못한 것**① id 중복이 18,520행 중 8,561행이나 되는 원인(코드 주석에도 "원인 미확인"이라고만 적혀 있음) ② popularity·vote_count를 입력에 쓸지(예측 시점 정의에 따라 정보 누수가 될 수 있음) ③ 실제 서비스의 입력 계약(JSON 스키마)과 배포 방식**.
 
-| 상황 | 예상 응답 | 원인과 고칠 곳 | 수정 후 확인할 증거 |
+아래 표는 추측이 아니라 `predict.py`(신규 작성, models/vote_average_model.joblib 로딩)를 실제로 실행해 얻은 결과입니다. 재현 명령은 각 행에 표시했습니다.
+
+| 상황 | 실행 결과 | 원인과 고칠 곳 | 수정 후 확인할 증거 |
 |---|---|---|---|
-| 정상 입력 | vote_average 예측값(0~10 사이 소수)과 200 응답 | 해당 없음 | 예측값이 `vote_average_predictions.csv`의 실제값과 비슷한 범위에 있는지 확인 |
-| 잘못된 입력 | 입력 검증 오류(422 등) | 필수 값 누락(예: overview 빈 값 미처리) 또는 release_date 형식 오류 | 오류 메시지에 어떤 값이 문제인지 구체적으로 나오는지 확인 |
-| 모델 준비 실패 | 서버 오류 응답 | `models/vote_average_model.joblib` 경로 오류·파일 손상 | 경로를 복구한 뒤 같은 요청이 정상 응답으로 바뀌는지 확인 |
-| 응답 성공·예측 오차 큼 | 200과 함께 실제와 차이가 큰 예측값 | 예: "The Gangster, the Cop, the Devil" 실제7.843·예측6.671(오차 −1.172)처럼 줄거리(overview) 텍스트만으로 설명하기 어려운 평점 편차, 학습 자료에 유사 사례 부족 | 오차가 큰 표본들을 모아 공통된 특징(장르, 언어, 연도 등)이 있는지 분석 |
+| 정상 입력 | `python predict.py --input inputs/normal.json` → `vote_average_pred: 6.905`, 정상 종료(exit 0) | 해당 없음 | 예측값이 `vote_average_predictions.csv`의 실제값(대략 5~8점대) 범위 안에 있는지 확인 — 확인됨 |
+| 잘못된 입력 | `python predict.py --input inputs/bad.json`(popularity에 "많음" 입력) → `{"error": "'popularity' 값이 숫자가 아닙니다: '많음'"}`, exit 1 | `predict.py`의 숫자 변환 단계에서 걸러짐(현재는 팀이 직접 만든 검증) | 다른 필수 값 누락 케이스(overview 빈 문자열, release_month 누락)도 같은 방식으로 막히는지 추가 실행 필요 |
+| 모델 준비 실패 | `python predict.py --input inputs/normal.json --model models/no-such-file.joblib` → `{"error": "모델 파일을 찾을 수 없습니다: models\\no-such-file.joblib"}`, exit 1 | 모델 경로가 존재하지 않을 때 `FileNotFoundError` 대신 명시적 에러 메시지로 처리하도록 `predict.py`에 직접 구현함 | 올바른 경로(`models/vote_average_model.joblib`)로 되돌리면 다시 정상 예측이 나오는지 확인 — 확인됨 |
+| 응답 성공·예측 오차 큼 | `python predict.py --input inputs/high-error-case.json`(실제 "The Gangster, the Cop, the Devil"의 개봉일·인기도·투표수·줄거리 입력) → `vote_average_pred: 6.671`, 실제 정답 7.843, 오차 −1.172. `vote_average_predictions.csv`의 값과 정확히 일치해 재현성 확인됨 | 줄거리(overview) 텍스트만으로 설명하기 어려운 평점 편차로 추정, 학습 자료에 유사 사례 부족 | 오차가 큰 표본들을 더 모아 공통된 특징(장르, 언어, 연도 등)이 있는지 분석 필요(아직 미완료) |
 
 ## 6. 동료 문서 수정 제안
 
