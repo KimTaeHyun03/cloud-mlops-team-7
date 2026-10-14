@@ -1,0 +1,6 @@
+artifacts/
+mlruns/
+__pycache__/
+.venv/
+data/processed/
+.pytest_cache/
