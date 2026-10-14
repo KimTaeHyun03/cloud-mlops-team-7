@@ -85,3 +85,50 @@ def test_helpers_and_index():
     assert len(client.get("/samples?n=5").json()) == 5
     assert client.get("/").status_code == 200
     assert client.get("/users/abc/history").status_code == 422
+
+
+# ---------- 내 평점으로 추천 (fold-in) ----------
+MY = [{"movie_id": 1, "rating": 5.0}, {"movie_id": 318, "rating": 4.5},
+      {"movie_id": 296, "rating": 4.0}, {"movie_id": 2571, "rating": 5.0}]
+
+
+def test_from_ratings_ok():
+    r = client.post("/recommend/from-ratings", json={"ratings": MY, "k": 10})
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["items"]) == 10
+    assert not {m["movie_id"] for m in MY} & {i["movieId"] for i in body["items"]}
+    scores = [i["predicted_rating"] for i in body["items"]]
+    assert scores == sorted(scores, reverse=True)
+    assert len(body["similar_users"]) == 5
+    assert body["n_ratings_used"] == 4
+
+
+def test_from_ratings_deterministic():
+    a = client.post("/recommend/from-ratings", json={"ratings": MY}).json()
+    b = client.post("/recommend/from-ratings", json={"ratings": MY}).json()
+    assert [i["movieId"] for i in a["items"]] == [i["movieId"] for i in b["items"]]
+
+
+def test_from_ratings_changes_with_taste():
+    low = [{**m, "rating": 0.5} for m in MY]
+    a = client.post("/recommend/from-ratings", json={"ratings": MY}).json()["items"]
+    b = client.post("/recommend/from-ratings", json={"ratings": low}).json()["items"]
+    assert [i["movieId"] for i in a] != [i["movieId"] for i in b]
+
+
+@pytest.mark.parametrize("payload", [
+    {"ratings": MY[:2]},                                              # 3개 미만
+    {"ratings": MY + [{"movie_id": 1, "rating": 3.0}]},               # 중복
+    {"ratings": [{"movie_id": 1, "rating": 6.0}] + MY[1:]},           # 범위 초과
+    {"ratings": [{"movie_id": 1, "rating": 3.3}] + MY[1:]},           # 0.5 단위 아님
+    {"ratings": [{"movie_id": 99999999, "rating": 3.0}] + MY[1:]},    # 없는 영화
+    {"ratings": MY, "k": 0},
+])
+def test_from_ratings_invalid_422(payload):
+    assert client.post("/recommend/from-ratings", json=payload).status_code == 422
+
+
+def test_popular():
+    items = client.get("/popular?limit=5").json()
+    assert len(items) == 5 and items[0]["n_ratings"] >= items[-1]["n_ratings"]

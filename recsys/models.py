@@ -132,6 +132,43 @@ class SVD(BasePredictor):
     def _raw(self, u, i):
         return self.user_mean[u] + np.einsum("ij,ij->i", self.user_f[u], self.item_f[i])
 
+    # ---------- 새 유저 fold-in: 재학습 없이 학습된 영화 벡터로 내 취향 벡터 계산 ----------
+    def _bias(self) -> np.ndarray:
+        return getattr(self, "item_bias", np.zeros(len(self.items)))
+
+    def fold_in(self, ratings: dict, ridge: float = config.FOLDIN_RIDGE,
+                prior: float = config.FOLDIN_MEAN_PRIOR) -> dict:
+        """ratings: {movieId: rating}. 학습에 없는 영화는 무시. -> 새 유저의 평균·취향 벡터."""
+        known = [(self.item2idx[m], r) for m, r in ratings.items() if m in self.item2idx]
+        idx = np.array([i for i, _ in known], dtype=int)
+        r = np.array([x for _, x in known], dtype=np.float64)
+        b = self._bias()
+        base_mean = float(self.user_mean.mean())
+        mean_g = (float((r - b[idx]).sum()) + prior * base_mean) / (len(r) + prior)
+        e = r - mean_g - b[idx]                              # 평균·영화편향으로 설명 안 되는 부분
+        V = self.item_f[idx]
+        f = np.linalg.solve(V.T @ V + ridge * np.eye(V.shape[1]), V.T @ e)
+        return {"mean": mean_g, "f": f, "rated_idx": idx, "n_used": len(r)}
+
+    def recommend_for_vector(self, state: dict, k: int = 10):
+        """내가 안 본 영화(평점 수 GUEST_MIN_ITEM_RATINGS 이상) 전부의 예상 평점을 계산해 Top-k.
+        8차원 벡터 행렬곱 1회라 영화 8천 편 기준 약 0.02ms."""
+        scores = np.clip(state["mean"] + self._bias() + self.item_f @ state["f"], MIN_RATING, MAX_RATING)
+        scores[self.n_item_ratings < config.GUEST_MIN_ITEM_RATINGS] = -np.inf
+        scores[state["rated_idx"]] = -np.inf
+        k = min(k, int(np.isfinite(scores).sum()))
+        top = np.argpartition(-scores, k - 1)[:k]
+        top = top[np.argsort(-scores[top], kind="stable")]
+        return [(int(self.items[j]), float(scores[j])) for j in top]
+
+    def similar_users_for_vector(self, state: dict, k: int = config.GUEST_SIMILAR_USERS):
+        """취향 벡터(코사인)가 가장 가까운 기존 유저 -> list[(userId, similarity)]."""
+        f = state["f"]
+        denom = np.linalg.norm(self.user_f, axis=1) * (np.linalg.norm(f) + 1e-12) + 1e-12
+        sims = (self.user_f @ f) / denom
+        top = np.argsort(-sims, kind="stable")[:k]
+        return [(int(self.users[j]), float(sims[j])) for j in top]
+
 
 class SVDBias(SVD):
     """개선판 SVD: 유저 평균 + 영화 편향(전체 쪽으로 축소)을 먼저 빼고 잔차에 SVD.

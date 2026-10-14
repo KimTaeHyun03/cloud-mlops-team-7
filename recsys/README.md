@@ -9,7 +9,7 @@
 pip install -r requirements.txt
 python recsys/data_prep.py        # data/processed/train.csv, test.csv 생성
 python recsys/train.py            # artifacts/model.joblib, metrics.json 생성
-pytest recsys/tests               # 16개 테스트
+pytest recsys/tests               # 26개 테스트
 uvicorn recsys.api:app --port 8000
 # 브라우저: http://127.0.0.1:8000/    (API 문서: /docs)
 ```
@@ -48,9 +48,9 @@ CLI: `python recsys/core.py --input recsys/inputs/normal.json` (`unknown_user.js
 | 학습에 없는 유저 99999 | 200 + `fallback: true`(영화 평균 사용) |
 | 영화 목록에 없는 `movie_id` | 404 |
 | `POST /recommend` `k=100` / `k=0` / `k="x"` | 422 |
-| `pytest recsys/tests` | 16 passed |
+| `pytest recsys/tests` | 26 passed (내 평점 추천 포함) |
 
-엔드포인트: `GET /health`, `POST /predict`, `POST /recommend`, `GET /movies?q=`, `GET /users`, `GET /users/{id}/history`, `GET /samples`, `GET /`.
+엔드포인트: `GET /health`, `POST /predict`, `POST /recommend`, `POST /recommend/from-ratings`, `GET /popular`, `GET /movies?q=`, `GET /users`, `GET /users/{id}/history`, `GET /samples`, `GET /`.
 
 ## Step 5. 화면 — 사람이 확인할 시나리오
 
@@ -64,6 +64,9 @@ CLI: `python recsys/core.py --input recsys/inputs/normal.json` (`unknown_user.js
 | 추천 k=0, k=100 | 한글 오류 메시지 | ☐ |
 | "3. 검증" → 샘플 30건 전체 예측 | 예측·실제·오차 표 + 평균 오차 요약 | ☐ |
 | 추천 카드 클릭 | 그 영화로 평점 예측 | ☐ |
+| "3. 내 평점으로 추천받기": 인기 영화에서 3개 이상 평점 선택 → 추천 받기 | 비슷한 유저 5명 + 추천 10편 표시, 내가 준 영화는 제외 | ☐ |
+| 평점 2개만 두고 추천 받기 | 한글 오류 메시지 (3개 이상 필요) | ☐ |
+| 새로고침 | 내가 준 평점이 유지됨(브라우저 localStorage) | ☐ |
 
 ## Step 6. 오차 분석과 개선
 
@@ -80,3 +83,37 @@ CLI: `python recsys/core.py --input recsys/inputs/normal.json` (`unknown_user.js
 
 - 하이퍼파라미터(차원 4/8/16, 축소 2/5/10)는 RMSE 0.904~0.912 범위로 차이가 작아 기본값(8, 5)을 유지했다. 이 탐색은 test로 했으므로 엄밀한 일반화 추정은 아니다.
 - **한계(트레이드오프):** Top-N 추천 보조 지표는 svd 0.0919 → svd_bias 0.0314(NDCG@10)로 **나빠졌다.** 영화 편향이 큰 영화(평점 10개 이상)가 상위에 올라오기 때문으로 추정되며, 아직 검증하지 않았다. 주 기능은 평점 예측이라 RMSE 기준으로 모델을 선정했다. 추천을 중시한다면 `/recommend`만 svd를 쓰는 방안이 있다 (미적용).
+
+## 내 평점으로 추천 (fold-in)
+
+화면 3번 패널. 유저가 영화에 평점을 주면 **재학습 없이** 학습된 `svd_bias` 모델에 새 유저를 끼워 넣는다.
+
+1. 내가 준 평점 r 에서 영화 편향을 빼 평균 성향을 구함 (평점 수가 적으면 전체 평균 쪽으로 당김)
+2. 남은 잔차를 학습된 영화 벡터 V 로 설명하는 내 취향 벡터 f 를 릿지 회귀로 계산: `f = (VᵀV + λI)⁻¹ Vᵀe`
+3. 내가 안 본 영화(학습 평점 50개 이상) **전부**의 예상 평점 = 내 평균 + 영화 편향 + V·f → 높은 순 Top-10
+4. 비슷한 유저 = 취향 벡터(f)와 기존 유저 벡터의 코사인 유사도 상위 5명
+
+로그인은 없다. 내 평점은 브라우저(localStorage)에 저장되고, 요청할 때마다 서버로 보낸다(서버는 저장하지 않음).
+
+**규제 강도 λ=0.06 선택 근거** (기존 유저의 train 평점 n개만 입력 → 그 유저의 test 평점 RMSE, 유저 300명, 작은 λ는 과적합):
+
+| 입력 평점 수 | 취향 벡터 없이(평균+영화편향) | fold-in λ=0.06 |
+|---|---:|---:|
+| 5 | 0.9465 | 0.9455 |
+| 10 | 0.9349 | 0.9322 |
+| 20 | 0.9095 | 0.9039 |
+| 전체 | 0.9034 | 0.8940 |
+
+λ 후보(1e-4~0.5)를 test 로 골랐으므로 엄밀한 일반화 추정은 아니다. 평점이 5~10개일 때는 개인화 효과가 작다(평점을 더 줄수록 좋아짐).
+
+**추천 순위 품질 (한계):** 같은 방식으로 기존 유저의 평점 n개만 입력하고 test 에서 좋아한(≥4.0) 영화를 맞히는지, 인기순(평점 수×평균, 같은 조건으로 평점 50개 이상·입력 영화 제외)과 비교 (300명):
+
+| 입력 평점 수 | 내 평점 추천 P@10 / NDCG@10 | 인기순 P@10 / NDCG@10 |
+|---|---:|---:|
+| 10 | 0.0267 / 0.0393 | 0.0297 / 0.0379 |
+| 20 | 0.0293 / 0.0381 | 0.0313 / 0.0413 |
+| 50 | 0.0343 / 0.0448 | 0.0363 / 0.0482 |
+
+- **인기순과 비슷하거나 약간 낮다.** 평점 예측용 모델(RMSE 최적화)이라 "무엇을 볼지" 순위 맞히기에는 강하지 않다. 이 한계는 Step 6 의 NDCG 하락과 같은 원인으로 추정(검증 안 함).
+- 후보를 평점 50개 이상 영화로 제한한 것은 효과가 있었다 (제한 10개일 때 NDCG@10 0.0261 → 50개 0.0381, 입력 20개 기준; 이 값도 test 로 고름).
+- **전부 예측 vs 랜덤 50편 후보:** 영화 8,239편 전부 예측해도 0.024ms(행렬곱 1회)라 비용 문제가 없고, 랜덤 50편은 오히려 느리고(0.214ms) 품질도 낮았다(NDCG@10 0.0286 vs 0.0381) → 전부 예측 채택.

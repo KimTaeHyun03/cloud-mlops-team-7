@@ -54,3 +54,13 @@ td.title { white-space: normal; min-width: 180px; }
 .card .ov.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .card .more { grid-column: 2 / 4; font-size: .8rem; color: var(--accent); background: none; padding: 0; text-align: left; }
 @media (max-width: 520px) { .card { grid-template-columns: 28px 1fr; } .card .score { grid-column: 2; } .big .num { font-size: 2rem; } }
+h3 { margin: 16px 0 8px; font-size: .95rem; }
+.rate-list { list-style: none; margin: 0 0 8px; padding: 0; }
+.rate-list li { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 6px 4px; border-bottom: 1px solid var(--line); font-size: .9rem; }
+.rate-list li .t { flex: 1; }
+.rate-list select { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; font-size: .9rem; }
+.rate-list.scroll { max-height: 260px; overflow: auto; }
+.similar { margin: 10px 0; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 10px; font-size: .88rem; }
+.similar div + div { margin-top: 4px; }
+.card.static { cursor: default; }
+.card.static:hover { background: none; }

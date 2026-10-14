@@ -105,6 +105,35 @@ class Recommender:
                 "fallback": user_id not in self.model.user2idx, "items": items,
                 "latency_ms": round((time.perf_counter() - t0) * 1000, 3)}
 
+    def guest_recommend(self, ratings: dict, k: int = 10) -> dict:
+        """내가 준 평점 {movieId: rating} -> 학습된 SVD 에 fold-in -> 예상 평점 순 추천 + 비슷한 유저."""
+        if not hasattr(self.model, "fold_in"):
+            raise InputError(f"현재 모델({self.model.name})은 내 평점 추천을 지원하지 않습니다")
+        unknown = [m for m in ratings if m not in self.titles]
+        if unknown:
+            raise InputError(f"영화 목록에 없는 movie_id: {unknown[:5]}")
+        used = {m: r for m, r in ratings.items() if m in self.model.item2idx}
+        if len(used) < config.GUEST_MIN_RATINGS:
+            raise InputError(f"학습 데이터에 있는 영화에 최소 {config.GUEST_MIN_RATINGS}개 평점이 필요합니다 (현재 {len(used)}개)")
+        t0 = time.perf_counter()
+        state = self.model.fold_in(used)
+        items = [{**self.movie_info(m), "predicted_rating": round(s, 3)}
+                 for m, s in self.model.recommend_for_vector(state, k)]
+        similar = []
+        for uid, sim in self.model.similar_users_for_vector(state):
+            fav = self.history(uid, 3)
+            similar.append({"user_id": uid, "similarity": round(sim, 3),
+                            "n_ratings": next(u["n_ratings"] for u in self._user_list if u["user_id"] == uid),
+                            "favorites": [{"movieId": h["movieId"], "title": h["title"], "rating": h["rating"]} for h in fav]})
+        return {"n_ratings_used": len(used), "n_ratings_skipped": len(ratings) - len(used),
+                "my_mean": round(state["mean"], 3), "items": items, "similar_users": similar,
+                "model_version": self.version, "latency_ms": round((time.perf_counter() - t0) * 1000, 3)}
+
+    def popular(self, limit: int = 20, offset: int = 0) -> list:
+        """평점을 매기기 쉽도록 학습 평점 수가 많은 영화 순."""
+        order = np.argsort(-self.model.n_item_ratings, kind="stable")[offset:offset + limit]
+        return [{**self.movie_info(int(self.model.items[i])), "n_ratings": int(self.model.n_item_ratings[i])} for i in order]
+
     def users(self) -> list:
         return self._user_list
 

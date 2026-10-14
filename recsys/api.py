@@ -34,6 +34,32 @@ class RecommendRequest(BaseModel):
     exclude_seen: bool = True
 
 
+class GuestRating(BaseModel):
+    movie_id: int = Field(ge=1)
+    rating: float = Field(ge=0.5, le=5.0, multiple_of=0.5)
+
+
+class GuestRecommendRequest(BaseModel):
+    ratings: list[GuestRating] = Field(min_length=3, max_length=200)
+    k: int = Field(default=10, ge=1, le=50)
+
+
+@app.post("/recommend/from-ratings")
+def recommend_from_ratings(req: GuestRecommendRequest):
+    ids = [r.movie_id for r in req.ratings]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(status_code=422, detail="같은 영화에 평점이 중복되었습니다")
+    try:
+        return rec.guest_recommend({r.movie_id: r.rating for r in req.ratings}, req.k)
+    except InputError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/popular")
+def popular(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0, le=5000)):
+    return rec.popular(limit, offset)
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "model_version": rec.version, "data_hash": rec.data_hash,

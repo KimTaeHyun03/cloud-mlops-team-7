@@ -34,7 +34,7 @@ async function api(path, options) {
   throw new Error(msg);
 }
 
-const FIELD_NAMES = { user_id: "유저 ID", movie_id: "영화 ID", k: "추천 개수(k)" };
+const FIELD_NAMES = { user_id: "유저 ID", movie_id: "영화 ID", k: "추천 개수(k)", rating: "평점", ratings: "내 평점" };
 function humanizeError(status, detail) {
   if (Array.isArray(detail)) {
     return detail.map((d) => {
@@ -43,6 +43,8 @@ function humanizeError(status, detail) {
         return `${field}: 정수만 입력할 수 있습니다 (입력값: ${JSON.stringify(d.input)})`;
       if (d.type === "greater_than_equal") return `${field}: ${d.ctx.ge} 이상이어야 합니다 (입력값: ${d.input})`;
       if (d.type === "less_than_equal") return `${field}: ${d.ctx.le} 이하여야 합니다 (입력값: ${d.input})`;
+      if (d.type === "too_short") return `${field}: ${d.ctx.min_length}개 이상 입력하세요`;
+      if (d.type === "multiple_of") return `${field}: 0.5 단위로 입력하세요`;
       return `${field}: ${d.msg}`;
     }).join(" / ");
   }
@@ -215,9 +217,12 @@ async function doRecommend() {
   }
 }
 
-function recCard(m, rank) {
-  const card = el("li", { class: "card", title: "클릭하면 이 영화로 평점 예측",
-    onclick: () => { $("movie-id").value = m.movieId; window.scrollTo({ top: 0, behavior: "smooth" }); doPredict(); } },
+function recCard(m, rank, clickable = true) {
+  const props = clickable
+    ? { class: "card", title: "클릭하면 이 영화로 평점 예측",
+        onclick: () => { $("movie-id").value = m.movieId; window.scrollTo({ top: 0, behavior: "smooth" }); doPredict(); } }
+    : { class: "card static" };
+  const card = el("li", props,
     el("div", { class: "rank" }, String(rank)),
     el("div", {}, el("div", {}, el("strong", {}, m.title)), el("div", {}, genreBadges(m.genres))),
     el("div", { class: "score" }, m.predicted_rating.toFixed(2)));
@@ -231,6 +236,98 @@ function recCard(m, rank) {
     card.append(ov, more);
   }
   return card;
+}
+
+
+// ---------- 내 평점으로 추천 ----------
+const STORE_KEY = "myRatings";
+let myRatings = loadMyRatings();   // { movieId: { title, rating } }
+
+function loadMyRatings() {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (_) { return {}; }
+}
+function saveMyRatings() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(myRatings)); } catch (_) { /* 저장 불가 환경이면 메모리에만 유지 */ }
+}
+
+function ratingSelect(current, onChange) {
+  const sel = el("select", { "aria-label": "평점" }, el("option", { value: "" }, "평점 선택"));
+  for (let v = 0.5; v <= 5; v += 0.5) sel.append(el("option", { value: String(v) }, v.toFixed(1)));
+  sel.value = current === undefined ? "" : String(current);
+  sel.addEventListener("change", () => onChange(sel.value === "" ? null : Number(sel.value)));
+  return sel;
+}
+
+function setMyRating(movie, rating) {
+  if (rating === null) delete myRatings[movie.movieId];
+  else myRatings[movie.movieId] = { title: movie.title, rating };
+  saveMyRatings();
+  renderMyRatings();
+}
+
+function candidateRow(movie) {
+  const cur = myRatings[movie.movieId];
+  return el("li", {}, el("span", { class: "t" }, movie.title),
+    ratingSelect(cur && cur.rating, (v) => setMyRating(movie, v)));
+}
+
+function renderMyRatings() {
+  const ids = Object.keys(myRatings);
+  $("my-count").textContent = `(${ids.length}개${ids.length < 3 ? " · 3개 이상 필요" : ""})`;
+  $("my-ratings").replaceChildren(...ids.map((id) => {
+    const movie = { movieId: Number(id), title: myRatings[id].title };
+    return el("li", {}, el("span", { class: "t" }, movie.title),
+      ratingSelect(myRatings[id].rating, (v) => setMyRating(movie, v)),
+      el("button", { class: "small secondary", type: "button", onclick: () => setMyRating(movie, null) }, "삭제"));
+  }));
+}
+
+async function showCandidates(path) {
+  const list = $("my-candidates");
+  try {
+    const movies = await api(path);
+    list.replaceChildren(...movies.map(candidateRow));
+    if (!movies.length) list.append(el("li", {}, "검색 결과 없음"));
+    list.classList.add("scroll");
+  } catch (e) {
+    setStatus($("my-status"), e.message, true);
+  }
+}
+
+let mySearchTimer = null;
+function onMySearch() {
+  clearTimeout(mySearchTimer);
+  mySearchTimer = setTimeout(() => {
+    const q = $("my-q").value.trim();
+    if (!q) { $("my-candidates").replaceChildren(); return; }
+    showCandidates(`/movies?q=${encodeURIComponent(q)}&limit=15`);
+  }, 250);
+}
+
+async function doMyRecommend() {
+  const btn = $("my-rec-btn");
+  btn.disabled = true;
+  setStatus($("my-status"), "내 취향 계산 중…");
+  $("my-similar").replaceChildren();
+  $("my-rec-list").replaceChildren();
+  try {
+    const ratings = Object.entries(myRatings).map(([id, v]) => ({ movie_id: Number(id), rating: v.rating }));
+    const data = await api("/recommend/from-ratings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ratings, k: 10 }),
+    });
+    setStatus($("my-status"), `내 평점 ${data.n_ratings_used}개 사용${data.n_ratings_skipped ? ` (모델이 모르는 영화 ${data.n_ratings_skipped}개 제외)` : ""} · 안 본 영화 전체에서 상위 10편 · ${data.latency_ms} ms · 모델 ${data.model_version}`);
+    const box = el("div", { class: "similar" }, el("strong", {}, "나와 취향이 비슷한 유저"));
+    data.similar_users.forEach((u) => box.append(el("div", {},
+      `유저 #${u.user_id} · 유사도 ${u.similarity.toFixed(2)} · 좋아한 영화: ` +
+      u.favorites.map((f) => `${f.title} (★${f.rating})`).join(", "))));
+    $("my-similar").append(box);
+    data.items.forEach((m, i) => $("my-rec-list").append(recCard(m, i + 1, false)));
+  } catch (e) {
+    setStatus($("my-status"), e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ---------- 초기화 ----------
@@ -252,6 +349,11 @@ async function init() {
   $("verify-btn").addEventListener("click", doVerify);
   $("movie-q").addEventListener("input", onMovieSearch);
   $("user-id").addEventListener("change", loadHistory);
+  $("my-q").addEventListener("input", onMySearch);
+  $("my-popular").addEventListener("click", () => showCandidates("/popular?limit=30"));
+  $("my-rec-btn").addEventListener("click", doMyRecommend);
+  $("my-clear").addEventListener("click", () => { myRatings = {}; saveMyRatings(); renderMyRatings(); });
+  renderMyRatings();
   loadHistory();
 }
 init();
