@@ -304,12 +304,59 @@ function onMySearch() {
   }, 250);
 }
 
+
+// 제목 표시용: "Shawshank Redemption, The (1994)" -> { title: "The Shawshank Redemption", year: "1994" }
+function prettyTitle(raw) {
+  let title = raw, year = "";
+  const y = title.match(/^(.*)\s\((\d{4})\)$/);
+  if (y) { title = y[1]; year = y[2]; }
+  const art = title.match(/^(.*),\s(The|A|An)$/);
+  if (art) title = `${art[2]} ${art[1]}`;
+  return { title, year };
+}
+
+function ratingMeter(value) {
+  return el("div", { class: "meter", title: `예상 평점 ${value.toFixed(2)} / 5` },
+    el("div", { class: "meter-fill", style: `width:${Math.round((value / 5) * 100)}%` }));
+}
+
+function myRecCard(m, rank) {
+  const t = prettyTitle(m.title);
+  const head = el("div", { class: "rc-head" },
+    el("span", { class: "rc-rank" }, String(rank)),
+    el("div", { class: "rc-title" }, el("strong", {}, t.title), t.year ? el("span", { class: "muted" }, ` ${t.year}`) : ""),
+    el("div", { class: "rc-score" }, el("span", { class: "stars" }, "★"), ` ${m.predicted_rating.toFixed(1)}`));
+  const card = el("li", { class: "rec-card" }, head, ratingMeter(m.predicted_rating),
+    el("div", { class: "rc-genres" }, genreBadges(m.genres)));
+  if (m.tmdb_overview) {
+    const ov = el("p", { class: "rc-ov clamp" }, m.tmdb_overview);
+    const more = el("button", { class: "more", type: "button", onclick: () => {
+      const clamped = ov.classList.toggle("clamp");
+      more.textContent = clamped ? "줄거리 더 보기" : "접기";
+    } }, "줄거리 더 보기");
+    card.append(ov, more);
+  }
+  return card;
+}
+
+function similarUserCard(u) {
+  const pct = Math.max(0, Math.min(100, Math.round(u.similarity * 100)));
+  return el("li", { class: "su-card" },
+    el("div", { class: "su-head" }, el("strong", {}, `유저 #${u.user_id}`), el("span", { class: "su-pct" }, `${pct}% 비슷`)),
+    el("div", { class: "meter small" }, el("div", { class: "meter-fill", style: `width:${pct}%` })),
+    el("div", { class: "muted" }, `평점 ${u.n_ratings}개 · 이 유저의 최애`),
+    el("ul", { class: "su-fav" }, ...u.favorites.map((f) =>
+      el("li", {}, `${prettyTitle(f.title).title} `, el("span", { class: "stars" }, `★${f.rating}`)))));
+}
+
 async function doMyRecommend() {
   const btn = $("my-rec-btn");
   btn.disabled = true;
   setStatus($("my-status"), "내 취향 계산 중…");
   $("my-similar").replaceChildren();
   $("my-rec-list").replaceChildren();
+  const oldTitle = $("my-rec-title");
+  if (oldTitle) oldTitle.remove();
   try {
     const ratings = Object.entries(myRatings).map(([id, v]) => ({ movie_id: Number(id), rating: v.rating }));
     const data = await api("/recommend/from-ratings", {
@@ -317,12 +364,11 @@ async function doMyRecommend() {
       body: JSON.stringify({ ratings, k: 10 }),
     });
     setStatus($("my-status"), `내 평점 ${data.n_ratings_used}개 사용${data.n_ratings_skipped ? ` (모델이 모르는 영화 ${data.n_ratings_skipped}개 제외)` : ""} · 안 본 영화 전체에서 상위 10편 · ${data.latency_ms} ms · 모델 ${data.model_version}`);
-    const box = el("div", { class: "similar" }, el("strong", {}, "나와 취향이 비슷한 유저"));
-    data.similar_users.forEach((u) => box.append(el("div", {},
-      `유저 #${u.user_id} · 유사도 ${u.similarity.toFixed(2)} · 좋아한 영화: ` +
-      u.favorites.map((f) => `${f.title} (★${f.rating})`).join(", "))));
-    $("my-similar").append(box);
-    data.items.forEach((m, i) => $("my-rec-list").append(recCard(m, i + 1, false)));
+    $("my-similar").append(el("h3", {}, "나와 취향이 비슷한 유저"),
+      el("ul", { class: "su-grid" }, ...data.similar_users.map(similarUserCard)));
+    $("my-rec-list").before(el("h3", { id: "my-rec-title" }, `추천 영화 TOP ${data.items.length}`,
+      el("span", { class: "muted" }, " · 이 유저들과 내 평점으로 계산한 예상 평점 순")));
+    data.items.forEach((m, i) => $("my-rec-list").append(myRecCard(m, i + 1)));
   } catch (e) {
     setStatus($("my-status"), e.message, true);
   } finally {
