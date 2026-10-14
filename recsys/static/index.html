@@ -3,46 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>영화 평점 예측</title>
+  <title>영화 취향 추천</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header>
-    <h1>🎬 영화 평점 예측</h1>
-    <p class="sub">유저와 영화를 고르면 그 유저가 줄 평점을 예측합니다. <span id="model-info" class="muted"></span></p>
+    <h1>🎬 영화 취향 추천</h1>
+    <p class="sub">영화에 평점을 주면 취향이 비슷한 유저와 추천 영화를 보여줍니다. <span id="model-info" class="muted"></span></p>
   </header>
 
   <main>
-    <section class="panel" id="predict-panel">
-      <h2>1. 평점 예측</h2>
-      <div class="form-row">
-        <label>유저 ID
-          <input id="user-id" type="text" inputmode="numeric" value="1" list="user-list" autocomplete="off">
-          <datalist id="user-list"></datalist>
-        </label>
-        <button type="button" id="random-user" class="secondary">랜덤 유저</button>
-      </div>
-      <div class="form-row">
-        <label class="grow">영화 검색 (제목 일부)
-          <input id="movie-q" type="text" placeholder="예: Toy Story" autocomplete="off">
-        </label>
-        <label>영화 ID
-          <input id="movie-id" type="text" inputmode="numeric" value="318">
-        </label>
-      </div>
-      <ul id="movie-results" class="results"></ul>
-      <button type="button" id="predict-btn">예측하기</button>
-      <div id="predict-status" class="status" role="status"></div>
-      <div id="predict-result"></div>
-    </section>
-
-    <section class="panel" id="history-panel">
-      <h2>2. 이 유저의 취향 <span class="muted">(높게 평가한 영화)</span></h2>
-      <ul id="history" class="chips"></ul>
-    </section>
-
     <section class="panel" id="my-panel">
-      <h2>3. 내 평점으로 추천받기</h2>
+      <h2>1. 내 평점으로 추천받기</h2>
       <p class="muted">영화에 평점을 3개 이상 주면, 학습된 모델이 내 취향을 계산해 안 본 영화를 추천하고 취향이 비슷한 유저를 보여줍니다. 평점은 이 브라우저에만 저장됩니다.</p>
       <div class="form-row">
         <label class="grow">영화 검색 (제목 일부)
@@ -61,30 +33,18 @@
     </section>
 
     <section class="panel" id="verify-panel">
-      <h2>4. 검증 (예측 vs 실제 평점)</h2>
+      <h2>2. 검증 (예측 vs 실제 평점)</h2>
       <p class="muted">학습에 쓰지 않은 test 평점입니다. 예측이 실제와 비슷한지 직접 확인하세요.</p>
       <button type="button" id="verify-btn">샘플 30건 전체 예측</button>
       <div id="verify-summary" class="status"></div>
       <div class="table-wrap">
         <table id="verify-table">
-          <thead><tr><th>유저</th><th>영화</th><th>예측</th><th>실제</th><th>오차</th><th></th></tr></thead>
+          <thead><tr><th>유저</th><th>영화</th><th>예측</th><th>실제</th><th>오차</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
     </section>
 
-    <section class="panel" id="rec-panel">
-      <h2>5. 추천 Top-N <span class="muted">(예측 평점 순, 보조 기능)</span></h2>
-      <div class="form-row">
-        <label>추천 개수 k
-          <input id="rec-k" type="text" inputmode="numeric" value="10">
-        </label>
-        <label class="check"><input id="rec-exclude" type="checkbox" checked> 이미 본 영화 제외</label>
-        <button type="button" id="rec-btn">추천 보기</button>
-      </div>
-      <div id="rec-status" class="status" role="status"></div>
-      <ol id="rec-list" class="cards"></ol>
-    </section>
   </main>
 
   <script src="/static/app.js"></script>

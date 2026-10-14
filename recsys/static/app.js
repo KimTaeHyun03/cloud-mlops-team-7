@@ -12,12 +12,6 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
-// 숫자 문자열이면 숫자로, 아니면 원문 그대로 보내서 서버가 422로 검증하게 한다
-function parseInput(text) {
-  const t = text.trim();
-  return /^-?\d+$/.test(t) ? Number(t) : t;
-}
-
 async function api(path, options) {
   let res;
   try {
@@ -56,190 +50,13 @@ function setStatus(node, text, isError = false) {
   node.classList.toggle("error", isError);
 }
 
-function stars(rating) {
-  const full = Math.floor(rating), half = rating - full >= 0.5;
-  return "★".repeat(full) + (half ? "½" : "");
-}
-
 function genreBadges(genres) {
   const frag = document.createDocumentFragment();
   genres.forEach((g) => frag.append(el("span", { class: "badge genre" }, g)));
   return frag;
 }
 
-// ---------- 평점 예측 ----------
-function renderPrediction(r) {
-  const box = $("predict-result");
-  box.replaceChildren();
-  const left = el("div", {},
-    el("div", { class: "num" }, r.predicted_rating.toFixed(2)),
-    el("div", { class: "stars" }, stars(r.predicted_rating)));
-  const mid = el("div", { class: "cmp" },
-    el("div", { class: "movie-title" }, r.title),
-    el("div", {}, genreBadges(r.genres)),
-    el("div", {},
-      el("span", { class: "badge " + (r.likely_like ? "like" : "dislike") }, r.likely_like ? "좋아할 듯 (≥4.0)" : "별로일 듯 (<4.0)"),
-      r.fallback ? el("span", { class: "badge fallback" }, "fallback") : ""));
-  const parts = [left, mid];
-  if (r.fallback_reason) parts.push(el("div", { class: "muted" }, r.fallback_reason));
-  if (r.actual_rating !== null) {
-    const diff = r.predicted_rating - r.actual_rating;
-    const note = r.actual_source === "train" ? " (학습에 사용된 평점 — 검증용 아님)" : " (test 평점)";
-    parts.push(el("div", { class: "cmp" },
-      el("div", {}, `실제 평점: ${r.actual_rating.toFixed(1)}${note}`),
-      el("div", { class: Math.abs(diff) <= 0.5 ? "err-good" : "err-bad" }, `오차: ${diff >= 0 ? "+" : ""}${diff.toFixed(2)}`)));
-  } else {
-    parts.push(el("div", { class: "muted" }, "이 유저의 이 영화 실제 평점 기록 없음"));
-  }
-  box.append(el("div", { class: "big" }, ...parts));
-  if (r.tmdb_overview) box.append(el("p", { class: "muted" }, r.tmdb_overview));
-  box.append(el("p", { class: "muted" }, `모델 ${r.model_version} · ${r.latency_ms} ms`));
-}
-
-async function doPredict() {
-  const btn = $("predict-btn");
-  btn.disabled = true;
-  setStatus($("predict-status"), "예측 중…");
-  $("predict-result").replaceChildren();
-  try {
-    const data = await api("/predict", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: parseInput($("user-id").value), movie_id: parseInput($("movie-id").value) }),
-    });
-    setStatus($("predict-status"), "");
-    renderPrediction(data);
-  } catch (e) {
-    setStatus($("predict-status"), e.message, true);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-// ---------- 영화 검색 ----------
-let searchTimer = null;
-function onMovieSearch() {
-  clearTimeout(searchTimer);
-  searchTimer = setTimeout(async () => {
-    const q = $("movie-q").value.trim();
-    const list = $("movie-results");
-    if (!q) { list.replaceChildren(); return; }
-    try {
-      const movies = await api(`/movies?q=${encodeURIComponent(q)}&limit=15`);
-      list.replaceChildren(...movies.map((m) => el("li", {
-        onclick: () => { $("movie-id").value = m.movieId; list.replaceChildren(); $("movie-q").value = m.title; },
-      }, `${m.title} (ID ${m.movieId})`)));
-      if (!movies.length) list.append(el("li", {}, "검색 결과 없음"));
-    } catch (e) {
-      setStatus($("predict-status"), e.message, true);
-    }
-  }, 250);
-}
-
-// ---------- 유저 취향 ----------
-async function loadHistory() {
-  const list = $("history");
-  const uid = parseInput($("user-id").value);
-  list.replaceChildren();
-  if (typeof uid !== "number" || uid < 1) {
-    list.append(el("li", {}, "유효한 유저 ID를 입력하면 표시됩니다"));
-    return;
-  }
-  try {
-    const items = await api(`/users/${uid}/history?limit=10`);
-    if (!items.length) list.append(el("li", {}, "학습 데이터에 없는 유저입니다"));
-    items.forEach((m) => list.append(el("li", {
-      title: "클릭하면 이 영화로 예측",
-      onclick: () => { $("movie-id").value = m.movieId; doPredict(); },
-    }, `${m.title} ★${m.rating} · ${m.genres.join(", ")}`)));
-  } catch (e) {
-    list.append(el("li", {}, e.message));
-  }
-}
-
-// ---------- 검증 ----------
-async function doVerify() {
-  const btn = $("verify-btn");
-  btn.disabled = true;
-  const tbody = $("verify-table").tBodies[0];
-  tbody.replaceChildren();
-  setStatus($("verify-summary"), "예측 중…");
-  try {
-    const samples = await api("/samples?n=30");
-    const rows = [];
-    for (const s of samples) {
-      const r = await api("/predict", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: s.user_id, movie_id: s.movie_id }),
-      });
-      const diff = r.predicted_rating - s.actual_rating;
-      rows.push(diff);
-      tbody.append(el("tr", {},
-        el("td", {}, String(s.user_id)),
-        el("td", { class: "title" }, s.title || String(s.movie_id)),
-        el("td", {}, r.predicted_rating.toFixed(2)),
-        el("td", {}, s.actual_rating.toFixed(1)),
-        el("td", { class: Math.abs(diff) <= 0.5 ? "err-good" : "err-bad" }, (diff >= 0 ? "+" : "") + diff.toFixed(2)),
-        el("td", {}, el("button", { class: "small secondary", type: "button", onclick: () => {
-          $("user-id").value = s.user_id; $("movie-id").value = s.movie_id; loadHistory(); doPredict();
-          window.scrollTo({ top: 0, behavior: "smooth" });
-        } }, "보기"))));
-    }
-    const mae = rows.reduce((a, d) => a + Math.abs(d), 0) / rows.length;
-    const within = rows.filter((d) => Math.abs(d) <= 0.5).length;
-    setStatus($("verify-summary"), `샘플 ${rows.length}건 · 평균 절대 오차 ${mae.toFixed(2)} · 오차 0.5 이내 ${within}건 (${Math.round(100 * within / rows.length)}%)`);
-  } catch (e) {
-    setStatus($("verify-summary"), e.message, true);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-// ---------- 추천 Top-N ----------
-async function doRecommend() {
-  const btn = $("rec-btn");
-  btn.disabled = true;
-  setStatus($("rec-status"), "추천 계산 중…");
-  $("rec-list").replaceChildren();
-  try {
-    const data = await api("/recommend", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        user_id: parseInput($("user-id").value), k: parseInput($("rec-k").value),
-        exclude_seen: $("rec-exclude").checked,
-      }),
-    });
-    setStatus($("rec-status"), `${data.latency_ms} ms · 모델 ${data.model_version}${data.fallback ? " · 학습에 없는 유저 → 영화 평균 순(fallback)" : ""}`);
-    data.items.forEach((m, i) => $("rec-list").append(recCard(m, i + 1)));
-  } catch (e) {
-    setStatus($("rec-status"), e.message, true);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function recCard(m, rank, clickable = true) {
-  const props = clickable
-    ? { class: "card", title: "클릭하면 이 영화로 평점 예측",
-        onclick: () => { $("movie-id").value = m.movieId; window.scrollTo({ top: 0, behavior: "smooth" }); doPredict(); } }
-    : { class: "card static" };
-  const card = el("li", props,
-    el("div", { class: "rank" }, String(rank)),
-    el("div", {}, el("div", {}, el("strong", {}, m.title)), el("div", {}, genreBadges(m.genres))),
-    el("div", { class: "score" }, m.predicted_rating.toFixed(2)));
-  if (m.tmdb_overview) {
-    const ov = el("div", { class: "ov clamp" }, m.tmdb_overview);
-    const more = el("button", { class: "more", type: "button", onclick: (ev) => {
-      ev.stopPropagation();
-      const clamped = ov.classList.toggle("clamp");
-      more.textContent = clamped ? "줄거리 더 보기" : "접기";
-    } }, "줄거리 더 보기");
-    card.append(ov, more);
-  }
-  return card;
-}
-
-
-// ---------- 내 평점으로 추천 ----------
+// ---------- 1. 내 평점으로 추천 ----------
 const STORE_KEY = "myRatings";
 let myRatings = loadMyRatings();   // { movieId: { title, rating } }
 
@@ -303,7 +120,6 @@ function onMySearch() {
     showCandidates(`/movies?q=${encodeURIComponent(q)}&limit=15`);
   }, 250);
 }
-
 
 // 제목 표시용: "Shawshank Redemption, The (1994)" -> { title: "The Shawshank Redemption", year: "1994" }
 function prettyTitle(raw) {
@@ -376,30 +192,53 @@ async function doMyRecommend() {
   }
 }
 
+// ---------- 2. 검증 (예측 vs 실제 평점) ----------
+async function doVerify() {
+  const btn = $("verify-btn");
+  btn.disabled = true;
+  const tbody = $("verify-table").tBodies[0];
+  tbody.replaceChildren();
+  setStatus($("verify-summary"), "예측 중…");
+  try {
+    const samples = await api("/samples?n=30");
+    const diffs = [];
+    for (const s of samples) {
+      const r = await api("/predict", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: s.user_id, movie_id: s.movie_id }),
+      });
+      const diff = r.predicted_rating - s.actual_rating;
+      diffs.push(diff);
+      tbody.append(el("tr", {},
+        el("td", {}, String(s.user_id)),
+        el("td", { class: "title" }, s.title || String(s.movie_id)),
+        el("td", {}, r.predicted_rating.toFixed(2)),
+        el("td", {}, s.actual_rating.toFixed(1)),
+        el("td", { class: Math.abs(diff) <= 0.5 ? "err-good" : "err-bad" }, (diff >= 0 ? "+" : "") + diff.toFixed(2))));
+    }
+    const mae = diffs.reduce((a, d) => a + Math.abs(d), 0) / diffs.length;
+    const within = diffs.filter((d) => Math.abs(d) <= 0.5).length;
+    setStatus($("verify-summary"), `샘플 ${diffs.length}건 · 평균 절대 오차 ${mae.toFixed(2)} · 오차 0.5 이내 ${within}건 (${Math.round(100 * within / diffs.length)}%)`);
+  } catch (e) {
+    setStatus($("verify-summary"), e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 // ---------- 초기화 ----------
 async function init() {
   try {
     const h = await api("/health");
     $("model-info").textContent = `· 모델 ${h.model_version}`;
-    const users = await api("/users");
-    $("user-list").replaceChildren(...users.map((u) => el("option", { value: u.user_id }, `평점 ${u.n_ratings}개`)));
-    $("random-user").addEventListener("click", () => {
-      $("user-id").value = users[Math.floor(Math.random() * users.length)].user_id;
-      loadHistory();
-    });
   } catch (e) {
-    setStatus($("predict-status"), e.message, true);
+    setStatus($("my-status"), e.message, true);
   }
-  $("predict-btn").addEventListener("click", doPredict);
-  $("rec-btn").addEventListener("click", doRecommend);
-  $("verify-btn").addEventListener("click", doVerify);
-  $("movie-q").addEventListener("input", onMovieSearch);
-  $("user-id").addEventListener("change", loadHistory);
   $("my-q").addEventListener("input", onMySearch);
   $("my-popular").addEventListener("click", () => showCandidates("/popular?limit=30"));
   $("my-rec-btn").addEventListener("click", doMyRecommend);
   $("my-clear").addEventListener("click", () => { myRatings = {}; saveMyRatings(); renderMyRatings(); });
+  $("verify-btn").addEventListener("click", doVerify);
   renderMyRatings();
-  loadHistory();
 }
 init();
