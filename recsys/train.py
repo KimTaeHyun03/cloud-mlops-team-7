@@ -22,7 +22,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from recsys import config
 from recsys.evaluate import evaluate
-from recsys.models import SVD, GlobalMean, ItemMean, UserMean
+from recsys.models import SVD, GlobalMean, ItemMean, SVDBias, UserMean
 
 
 def main() -> None:
@@ -36,6 +36,7 @@ def main() -> None:
         (UserMean(), {}),
         (ItemMean(), {"damping": config.ITEM_DAMPING}),
         (SVD(), {"n_factors": config.SVD_FACTORS}),
+        (SVDBias(), {"n_factors": config.SVD_BIAS_FACTORS, "damping": config.BIAS_DAMPING}),
     ]
     results = []
     for model, params in candidates:
@@ -52,10 +53,10 @@ def main() -> None:
               f"{m[f'ndcg@{k}']:>9.4f}{m['fallback_ratio']:>10.4f}{m['fit_seconds']:>8.1f}")
 
     best_model, best_params, best_m = min(results, key=lambda r: r[2]["rmse"])
-    baselines = [r for r in results if r[0].name != "svd"]
+    baselines = [r for r in results if r[0].name not in ("svd", "svd_bias")]
     best_base = min(baselines, key=lambda r: r[2]["rmse"])
     print(f"\n베스트(RMSE 최소): {best_model.name} {best_m['rmse']:.4f} / 최선 베이스라인 {best_base[0].name} {best_base[2]['rmse']:.4f}")
-    svd_m = next(r[2] for r in results if r[0].name == "svd")
+    svd_m = next(r[2] for r in results if r[0] is best_model or r[0].name == "svd")
     if svd_m["rmse"] >= best_base[2]["rmse"]:
         print("경고: SVD 가 베이스라인보다 RMSE 가 낮지 않습니다. 원인을 README에 기록하세요.")
 

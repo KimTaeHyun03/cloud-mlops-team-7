@@ -133,4 +133,27 @@ class SVD(BasePredictor):
         return self.user_mean[u] + np.einsum("ij,ij->i", self.user_f[u], self.item_f[i])
 
 
-MODEL_CLASSES = {c.name: c for c in (GlobalMean, UserMean, ItemMean, SVD)}
+class SVDBias(SVD):
+    """개선판 SVD: 유저 평균 + 영화 편향(전체 쪽으로 축소)을 먼저 빼고 잔차에 SVD.
+    개선 포인트: (1) 평점 수 적은 영화의 오차 축소, (2) 잠재차원 축소로 과적합 완화."""
+    name = "svd_bias"
+
+    def __init__(self, n_factors: int = config.SVD_BIAS_FACTORS, damping: float = config.BIAS_DAMPING):
+        super().__init__(n_factors)
+        self.damping = damping
+
+    def _fit(self, ui, ii, r):
+        resid = r - self.user_mean[ui]
+        n_i = self.n_item_ratings
+        self.item_bias = np.bincount(ii, weights=resid, minlength=len(n_i)) / (n_i + self.damping)
+        centered = sp.csr_matrix((resid - self.item_bias[ii], (ui, ii)), shape=self.R.shape)
+        v0 = np.random.RandomState(config.SEED).uniform(-1, 1, min(centered.shape))
+        U, s, Vt = svds(centered, k=self.n_factors, v0=v0)
+        order = np.argsort(-s)
+        self.user_f, self.item_f = (U * s)[:, order], Vt[order].T
+
+    def _raw(self, u, i):
+        return self.user_mean[u] + self.item_bias[i] + np.einsum("ij,ij->i", self.user_f[u], self.item_f[i])
+
+
+MODEL_CLASSES = {c.name: c for c in (GlobalMean, UserMean, ItemMean, SVD, SVDBias)}

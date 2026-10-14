@@ -25,3 +25,5 @@ TOP_K = 10                 # 평가 K
 ITEM_DAMPING = 5           # 영화 평균을 전체 평균 쪽으로 당기는 가중치(가상 평점 수)
 MIN_ITEM_RATINGS_FOR_REC = 10  # 추천(Top-N) 후보로 쓸 영화의 최소 학습 평점 수
 SVD_FACTORS = 32
+SVD_BIAS_FACTORS = 8       # 개선판(SVDBias) 잠재차원
+BIAS_DAMPING = 5           # 개선판 영화 편향 축소 가중치

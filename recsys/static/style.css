@@ -1,0 +1,56 @@
+:root {
+  --bg: #f5f6fa; --card: #fff; --text: #1f2430; --muted: #6b7280; --line: #e3e6ee;
+  --accent: #4f46e5; --accent-weak: #eef0ff; --good: #15803d; --bad: #b91c1c; --warn: #b45309;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "Segoe UI", "Malgun Gothic", sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+header { padding: 20px 16px 4px; max-width: 900px; margin: 0 auto; }
+h1 { margin: 0; font-size: 1.6rem; }
+h2 { margin: 0 0 12px; font-size: 1.1rem; }
+.sub { margin: 4px 0 0; }
+.muted { color: var(--muted); font-weight: normal; font-size: .85em; }
+main { max-width: 900px; margin: 0 auto; padding: 12px 16px 40px; display: grid; gap: 16px; }
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.form-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 12px; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: .85rem; color: var(--muted); }
+label.grow { flex: 1; min-width: 200px; }
+label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--text); }
+input[type=text] { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 1rem; width: 100%; min-width: 90px; }
+button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 9px 16px; font-size: .95rem; cursor: pointer; }
+button:hover { filter: brightness(1.08); }
+button:disabled { opacity: .5; cursor: wait; }
+button.secondary { background: var(--accent-weak); color: var(--accent); }
+button.small { padding: 4px 10px; font-size: .8rem; }
+.status { min-height: 1.4em; margin: 8px 0; font-size: .9rem; color: var(--muted); }
+.status.error { color: var(--bad); font-weight: 600; }
+.results { list-style: none; margin: 0 0 12px; padding: 0; max-height: 180px; overflow: auto; border-radius: 8px; }
+.results li { padding: 6px 10px; border: 1px solid var(--line); border-top: 0; cursor: pointer; font-size: .9rem; }
+.results li:first-child { border-top: 1px solid var(--line); }
+.results li:hover { background: var(--accent-weak); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .75rem; font-weight: 600; margin-right: 6px; }
+.badge.fallback { background: #fef3c7; color: var(--warn); }
+.badge.like { background: #dcfce7; color: var(--good); }
+.badge.dislike { background: #fee2e2; color: var(--bad); }
+.badge.genre { background: var(--accent-weak); color: var(--accent); font-weight: 500; }
+.big { display: flex; flex-wrap: wrap; gap: 20px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: 10px; margin-top: 8px; }
+.big .num { font-size: 2.4rem; font-weight: 700; color: var(--accent); line-height: 1; }
+.big .cmp { font-size: .95rem; }
+.big .movie-title { font-weight: 600; font-size: 1.05rem; }
+.stars { color: #f59e0b; letter-spacing: 2px; }
+.chips { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.chips li { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: .85rem; cursor: pointer; }
+.chips li:hover { background: var(--accent-weak); }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+td.title { white-space: normal; min-width: 180px; }
+.err-good { color: var(--good); } .err-bad { color: var(--bad); }
+.cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.card { display: grid; grid-template-columns: 36px 1fr auto; gap: 10px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+.card:hover { background: var(--accent-weak); }
+.card .rank { font-weight: 700; color: var(--accent); font-size: 1.1rem; }
+.card .score { font-weight: 700; font-size: 1.1rem; }
+.card .ov { grid-column: 2 / 4; font-size: .85rem; color: var(--muted); }
+.card .ov.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card .more { grid-column: 2 / 4; font-size: .8rem; color: var(--accent); background: none; padding: 0; text-align: left; }
+@media (max-width: 520px) { .card { grid-template-columns: 28px 1fr; } .card .score { grid-column: 2; } .big .num { font-size: 2rem; } }
