@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>영화 취향 추천</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>🎬 영화 취향 추천</h1>
+    <p class="sub">영화에 평점을 주면 취향이 비슷한 유저와 추천 영화를 보여줍니다. <span id="model-info" class="muted"></span></p>
+  </header>
+
+  <main>
+    <section class="panel" id="my-panel">
+      <h2>1. 내 평점으로 추천받기</h2>
+      <p class="muted">영화에 평점을 3개 이상 주면, 학습된 모델이 내 취향을 계산해 안 본 영화를 추천하고 취향이 비슷한 유저를 보여줍니다. 평점은 이 브라우저에만 저장됩니다.</p>
+      <div class="form-row">
+        <label class="grow">영화 검색 (제목 일부)
+          <input id="my-q" type="text" placeholder="예: Matrix" autocomplete="off">
+        </label>
+        <button type="button" id="my-popular" class="secondary">인기 영화에서 고르기</button>
+      </div>
+      <ul id="my-candidates" class="rate-list"></ul>
+      <h3>내가 준 평점 <span id="my-count" class="muted"></span>
+        <button type="button" id="my-clear" class="small secondary">모두 지우기</button></h3>
+      <ul id="my-ratings" class="rate-list"></ul>
+      <button type="button" id="my-rec-btn">내 취향 추천 받기</button>
+      <div id="my-status" class="status" role="status"></div>
+      <div id="my-similar"></div>
+      <ol id="my-rec-list" class="rec-grid"></ol>
+    </section>
+
+    <section class="panel" id="verify-panel">
+      <h2>2. 검증 (예측 vs 실제 평점)</h2>
+      <p class="muted">학습에 쓰지 않은 test 평점입니다. 예측이 실제와 비슷한지 직접 확인하세요.</p>
+      <button type="button" id="verify-btn">샘플 30건 전체 예측</button>
+      <div id="verify-summary" class="status"></div>
+      <div class="table-wrap">
+        <table id="verify-table">
+          <thead><tr><th>유저</th><th>영화</th><th>예측</th><th>실제</th><th>오차</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
