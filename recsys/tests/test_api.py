@@ -132,3 +132,24 @@ def test_from_ratings_invalid_422(payload):
 def test_popular():
     items = client.get("/popular?limit=5").json()
     assert len(items) == 5 and items[0]["n_ratings"] >= items[-1]["n_ratings"]
+
+
+def _last_log(tmp_path, monkeypatch):
+    import json
+    from recsys import config
+    return json.loads(config.REQUEST_LOG_PATH.read_text(encoding="utf-8").splitlines()[-1])
+
+
+def test_request_id_matches_log(tmp_path, monkeypatch):
+    r = client.post("/predict", json={"user_id": 1, "movie_id": 318})
+    log = _last_log(tmp_path, monkeypatch)
+    assert r.json()["request_id"] == r.headers["x-request-id"] == log["request_id"]
+    assert log["status"] == "ok" and log["model_version"] == r.json()["model_version"]
+    assert log["input"] == {"user_id": 1, "movie_id": 318}
+
+
+def test_error_request_is_logged_with_header_id(tmp_path, monkeypatch):
+    r = client.post("/predict", json={"user_id": "abc", "movie_id": 1})
+    log = _last_log(tmp_path, monkeypatch)
+    assert r.status_code == 422
+    assert log["request_id"] == r.headers["x-request-id"] and log["error_type"] == "validation_error"
