@@ -80,8 +80,9 @@ def test_archive_roundtrip_matches():
     res = archive_logs.archive(CFG, start, end, logs=FakeLogs(), s3=s3)
     assert res["query"]["count"] == 2 and res["reread"]["match"]
     assert res["reread"]["sha256"] == res["query"]["sha256"]
-    assert {k for _, k in s3.objs} == {"p/x/20261028T000000Z_20261029T000000Z/data.jsonl",
-                                       "p/x/20261028T000000Z_20261029T000000Z/query.json"}
+    keys = {k for _, k in s3.objs}
+    assert len(keys) == 2 and all(k.startswith("p/x/run-") and "/20261028T000000Z_20261029T000000Z/" in k for k in keys)
+    assert {k.rsplit("/", 1)[1] for k in keys} == {"data.jsonl", "query.json"}
 
 
 def test_archive_requires_bucket():

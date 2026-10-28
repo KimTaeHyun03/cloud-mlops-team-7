@@ -56,7 +56,8 @@ def archive(cfg: dict, start: datetime, end: datetime, dry_run: bool = False, lo
         if not cfg.get(key):
             raise ValueError(f"config 에 {key} 가 필요합니다 (수업에서 허용한 버킷·새 경로)")
     s3 = s3 or make_client(cfg, "s3")
-    base = f"{cfg['s3_prefix'].strip('/')}/{start:%Y%m%dT%H%M%SZ}_{end:%Y%m%dT%H%M%SZ}"
+    run = datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ")   # 매번 새 run 폴더: 기존 파일을 덮어쓰지 않는다
+    base = f"{cfg['s3_prefix'].strip('/')}/{run}/{start:%Y%m%dT%H%M%SZ}_{end:%Y%m%dT%H%M%SZ}"
     body = ("\n".join(lines) + "\n").encode("utf-8")
     s3.put_object(Bucket=cfg["s3_bucket"], Key=f"{base}/data.jsonl", Body=body, ContentType="application/x-ndjson")
     s3.put_object(Bucket=cfg["s3_bucket"], Key=f"{base}/query.json",
