@@ -75,10 +75,28 @@ class CloudWatchHandler(logging.Handler):
         for i in range(0, len(batch), MAX_BATCH):
             chunk = batch[i:i + MAX_BATCH]
             try:
-                self.client.put_log_events(logGroupName=self.cfg["log_group"],
-                                           logStreamName=self.cfg["log_stream"], logEvents=chunk)
+                self._put(chunk)
             except Exception as e:
+                if type(e).__name__ == "ResourceNotFoundException" and self._create_stream():
+                    try:
+                        self._put(chunk)   # 스트림을 만든 뒤 같은 묶음을 한 번 더 보낸다
+                        continue
+                    except Exception as e2:
+                        e = e2
                 print(f"[cloudwatch_sink] 전송 실패 {len(chunk)}건: {type(e).__name__}: {e}", file=sys.stderr)
+
+    def _put(self, chunk: list[dict]) -> None:
+        self.client.put_log_events(logGroupName=self.cfg["log_group"],
+                                   logStreamName=self.cfg["log_stream"], logEvents=chunk)
+
+    def _create_stream(self) -> bool:
+        try:
+            self.client.create_log_stream(logGroupName=self.cfg["log_group"], logStreamName=self.cfg["log_stream"])
+            print(f"[cloudwatch_sink] 스트림 생성: {self.cfg['log_group']}/{self.cfg['log_stream']}", file=sys.stderr)
+            return True
+        except Exception as e:
+            print(f"[cloudwatch_sink] 스트림 생성 실패: {type(e).__name__}: {e}", file=sys.stderr)
+            return False
 
     def close(self) -> None:
         self._stop.set()

@@ -89,3 +89,38 @@ def test_archive_requires_bucket():
     with pytest.raises(ValueError):
         archive_logs.archive(cfg, datetime(2026, 10, 28, tzinfo=timezone.utc),
                              datetime(2026, 10, 29, tzinfo=timezone.utc), logs=FakeLogs(), s3=FakeS3())
+
+
+class MissingStreamLogs(FakeLogs):
+    """스트림이 없다가 create_log_stream 이후에 보낼 수 있는 가짜 클라이언트"""
+    def __init__(self, can_create=True):
+        super().__init__()
+        self.exists, self.can_create = False, can_create
+
+    def put_log_events(self, **kw):
+        if not self.exists:
+            class ResourceNotFoundException(Exception):
+                pass
+            raise ResourceNotFoundException("The specified log stream does not exist.")
+        super().put_log_events(**kw)
+
+    def create_log_stream(self, **kw):
+        if not self.can_create:
+            raise RuntimeError("AccessDenied")
+        self.exists = True
+
+
+def test_missing_stream_is_created_and_batch_resent():
+    client = MissingStreamLogs()
+    h = CloudWatchHandler(CFG, client=client, start_thread=False)
+    h.emit(_record("a")); h.emit(_record("b"))
+    h.flush()
+    assert client.exists and [e["message"] for e in client.sent[0]["logEvents"]] == ["a", "b"]
+
+
+def test_missing_stream_without_permission_does_not_raise():
+    client = MissingStreamLogs(can_create=False)
+    h = CloudWatchHandler(CFG, client=client, start_thread=False)
+    h.emit(_record("a"))
+    h.flush()
+    assert client.sent == []

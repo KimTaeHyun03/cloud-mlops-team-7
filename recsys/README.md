@@ -143,3 +143,14 @@ CLI: `python recsys/core.py --input recsys/inputs/normal.json` (`unknown_user.js
 4. 서버: `RECSYS_LOG_CONFIG=config.json .venv/bin/python -m uvicorn recsys.api:app --host 127.0.0.1 --port 8080`
 5. 새 탭에서 요청 전송 후 콘솔의 CloudWatch → `yeonsung_jkk` → 스트림에서 `request_id` 확인
 6. S3 보관: `.venv/bin/python -m recsys.archive_logs --config config.json --start <UTC> --end <UTC>` (`--dry-run` 은 S3 에 쓰지 않음). 출력의 `reread.match: true` 와 건수·sha256 을 기록
+
+
+{
+  "region": "ap-northeast-2",
+  "expected_account_id": "093356173512",
+  "log_group": "yeonsung_jkk",
+  "log_stream": "recsys-api-20261028",
+  "send_interval_seconds": 5,
+  "s3_bucket": "yeonsung-jkk-s3",
+  "s3_prefix": "team7/recsys-logs>"
+}
