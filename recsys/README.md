@@ -129,8 +129,23 @@ CLI: `python recsys/core.py --input recsys/inputs/normal.json` (`unknown_user.js
 | `model_version`, `input`, `prediction` | 어떤 모델이 어떤 입력에 무엇을 답했나 |
 
 - 이름·연락처·토큰은 기록하지 않는다. 내 평점 추천은 평점 개수(`n_ratings`)만 남기고 영화별 평점은 남기지 않는다.
-- 실제 정답(`actual_rating`)을 확인해 연결하는 일은 아직 안 했다.
-- 확인: `pytest recsys/tests` → 28 passed (요청 표식이 응답·헤더·로그에서 일치하는지 포함).
+- 추천 계열(`/recommend`, `/recommend/from-ratings`)은 `prediction.items`에 추천된 영화 ID·순위·예측 평점을 남긴다 (행동의 실제 내용).
+
+### 피드백(실제 별점) 연결 — 강화학습의 보상 신호
+`POST /feedback` `{"request_id": "<응답의 request_id>", "movie_id": 318, "rating": 4.5}` 를 보내면 별점을 그 결과를 만든 요청에 연결해 `event: "feedback"` 로그 한 줄을 남긴다.
+화면에서는 `내 평점으로 추천` 결과의 각 카드 아래 "평점 보내기"로 보낸다.
+
+| 필드 | 내용 |
+|---|---|
+| `request_id`, `movie_id` | 어느 요청의 어느 영화에 대한 평점인지 (`event:"request"` 로그와 같은 `request_id`) |
+| `actual_rating`, `predicted_rating`, `abs_error` | 사용자가 준 실제 평점, 그때 서버가 낸 예측, 절대 오차 |
+| `reward` | 실제 평점 ≥ 4.0(`RELEVANT_THRESHOLD`)이면 1.0, 아니면 0.0 |
+
+- 서버가 최근 응답 20,000건의 결과를 **메모리에만** 기억한다. 서버를 다시 시작했거나 오래된 `request_id` 는 404, 그 요청의 결과에 없는 영화나 0.5 단위가 아닌 평점은 422.
+- 같은 (`request_id`, `movie_id`) 를 여러 번 보내면 모두 기록되고, 분석할 때 가장 늦은 `timestamp` 를 쓴다.
+- 확인: `pytest recsys/tests` → 38 passed, 로컬 서버+브라우저에서 추천 → 평점 보내기 → 로그에 `feedback` 줄 연결 확인.
+- 아직 안 한 것: 행동 선택 확률(탐색)과 유저 세션 연결. 이 로그만으로 강화학습을 실행할 수는 없다.
+- 확인: `pytest recsys/tests` → 요청 표식이 응답·헤더·로그에서 일치하는지 포함.
 
 ### CloudWatch Logs 전송 · S3 보관 (CloudShell)
 로그 그룹은 `yeonsung_jkk`. 코드는 작성·테스트(가짜 클라이언트)했고, **실제 AWS 전송은 CloudShell 에서 실행해야 확인된다 (아직 미확인).**
