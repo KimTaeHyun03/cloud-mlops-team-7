@@ -1,0 +1,9 @@
+{
+  "region": "TODO(확인 필요): 수업에서 허용한 리전",
+  "expected_account_id": "093356173512",
+  "log_group": "yeonsung_jkk",
+  "log_stream": "recsys-api-20261028",
+  "send_interval_seconds": 5,
+  "s3_bucket": "TODO(확인 필요): 수업에서 허용한 S3 버킷",
+  "s3_prefix": "TODO(확인 필요): 팀의 새 경로 (예: team7/recsys-logs)"
+}

@@ -8,3 +8,4 @@ uvicorn[standard]==0.45.0
 pydantic==2.12.3
 pytest==9.0.3
 httpx==0.28.1
+boto3==1.43.120

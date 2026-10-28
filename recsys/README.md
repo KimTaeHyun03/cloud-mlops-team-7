@@ -129,5 +129,17 @@ CLI: `python recsys/core.py --input recsys/inputs/normal.json` (`unknown_user.js
 | `model_version`, `input`, `prediction` | 어떤 모델이 어떤 입력에 무엇을 답했나 |
 
 - 이름·연락처·토큰은 기록하지 않는다. 내 평점 추천은 평점 개수(`n_ratings`)만 남기고 영화별 평점은 남기지 않는다.
-- 실제 정답(`actual_rating`)을 확인해 연결하는 일과 CloudWatch Logs 전송, S3 보관은 아직 안 했다. TODO(확인 필요): 로그 그룹·스트림 이름, 허용된 S3 버킷·경로.
+- 실제 정답(`actual_rating`)을 확인해 연결하는 일은 아직 안 했다.
 - 확인: `pytest recsys/tests` → 28 passed (요청 표식이 응답·헤더·로그에서 일치하는지 포함).
+
+### CloudWatch Logs 전송 · S3 보관 (CloudShell)
+로그 그룹은 `yeonsung_jkk`. 코드는 작성·테스트(가짜 클라이언트)했고, **실제 AWS 전송은 CloudShell 에서 실행해야 확인된다 (아직 미확인).**
+로컬 자격증명은 IAM·S3 목록 조회가 막혀 있어 로컬에서는 AWS 를 호출하지 않는다.
+
+1. 로컬: `python recsys/make_cloudshell_zip.py` → `dist/recsys-cloudshell.zip`
+2. CloudShell(허용 리전, 정상 로그인): Actions → Upload file → ZIP 업로드 후
+   `unzip recsys-cloudshell.zip -d recsys-lab && cd recsys-lab && python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt`
+3. `cp recsys/config.example.json config.json` 후 `nano config.json` 에 `region`, `log_stream`, `s3_bucket`, `s3_prefix` 입력 (TODO(확인 필요): 허용 리전·S3 버킷·경로)
+4. 서버: `RECSYS_LOG_CONFIG=config.json .venv/bin/python -m uvicorn recsys.api:app --host 127.0.0.1 --port 8080`
+5. 새 탭에서 요청 전송 후 콘솔의 CloudWatch → `yeonsung_jkk` → 스트림에서 `request_id` 확인
+6. S3 보관: `.venv/bin/python -m recsys.archive_logs --config config.json --start <UTC> --end <UTC>` (`--dry-run` 은 S3 에 쓰지 않음). 출력의 `reread.match: true` 와 건수·sha256 을 기록

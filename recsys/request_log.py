@@ -33,6 +33,11 @@ def setup() -> logging.Logger:
                     logging.FileHandler(config.REQUEST_LOG_PATH, encoding="utf-8")):
         handler.setFormatter(fmt)
         logger.addHandler(handler)
+    from recsys.cloudwatch_sink import build_from_env   # RECSYS_LOG_CONFIG 가 있을 때만 CloudWatch 로 전송
+    cw = build_from_env()
+    if cw:
+        cw.setFormatter(fmt)
+        logger.addHandler(cw)
     return logger
 
 
