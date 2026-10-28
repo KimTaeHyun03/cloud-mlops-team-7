@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 data/processed/
 .pytest_cache/
+logs/

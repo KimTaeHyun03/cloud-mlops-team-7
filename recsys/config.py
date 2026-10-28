@@ -15,6 +15,8 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 MODEL_PATH = ARTIFACTS_DIR / "model.joblib"
 METRICS_PATH = ARTIFACTS_DIR / "metrics.json"
+LOG_DIR = ROOT / "logs"
+REQUEST_LOG_PATH = LOG_DIR / "requests.jsonl"
 
 SEED = 42
 RELEVANT_THRESHOLD = 4.0   # rating >= 이 값이면 "좋아함"
