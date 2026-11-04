@@ -1,10 +1,17 @@
-# 검사(PR·push) 와 배포(master 에 반영될 때만)
+# 검사(PR·push) 와 배포(master 에 반영될 때만). 서버가 꺼져 있으면 켜고, 없으면 만든다.
 # 파일 위치: D:\ysu_26_2\MLOPS\.github\workflows\deploy.yml
 #
-# GitHub 레포 Settings → Secrets and variables → Actions 에 필요:
-#   EC2_HOST     EC2 퍼블릭 DNS 또는 IP
-#   EC2_SSH_KEY  EC2 접속용 개인 키 전체 내용
-#   (선택) EC2_USER  기본 ec2-user
+# GitHub 레포 Settings → Secrets and variables → Actions 에 필요한 값:
+#   AWS_ACCESS_KEY_ID      IAM 액세스 키 ID        (EC2 조회·시작·생성 권한이 있는 키)
+#   AWS_SECRET_ACCESS_KEY  IAM 비밀 액세스 키
+#   EC2_SSH_KEY            EC2 접속용 개인 키 전체 내용
+# 아래는 비밀이 아니라 기본값을 넣어 두었다 (같은 이름의 Secret 을 만들면 그 값이 우선):
+#   EC2_TAG_VALUE          기본 ysu-3a-team-7   서버에 붙은 Name 태그 값. 이 태그로 서버를 찾는다
+#   EC2_SECURITY_GROUP_ID  기본 sg-0525f27d7867dff20  서버를 새로 만들 때 쓸 보안 그룹 (22·8080 열림)
+#   EC2_INSTANCE_TYPE      기본 t3.micro
+#   (선택) EC2_TAG_KEY(기본 Name), EC2_AMI_ID, EC2_SUBNET_ID, EC2_KEY_NAME, EC2_IAM_PROFILE, EC2_USER, AWS_REGION
+# 서버 주소는 고정하지 않고 매번 태그로 조회한다. 태그로 서버가 없으면 새로 만들고
+# git clone·Docker 설정까지 한다 (scripts/ensure-ec2.sh). 배포는 scripts/deploy-ec2.sh.
 name: test-and-deploy
 
 on:
@@ -34,15 +41,77 @@ jobs:
     needs: test
     if: github.event_name != 'pull_request'   # PR 은 검사만, 배포는 master 반영·수동 실행일 때만
     runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION || 'ap-northeast-2' }}
     steps:
-      - name: EC2 에서 배포 스크립트 실행
+      - uses: actions/checkout@v4
+
+      - name: AWS 자격 설정
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: SSH 키 준비
+        id: key
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USER: ${{ secrets.EC2_USER }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
           install -m 700 -d ~/.ssh
           printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2_key && chmod 600 ~/.ssh/ec2_key
+          # 새 서버가 이 키로 접속을 받도록 공개 키를 만든다 (공개 키는 비밀이 아니다)
+          echo "pub=$(ssh-keygen -y -f ~/.ssh/ec2_key)" >> "$GITHUB_OUTPUT"
+
+      - name: 태그로 서버를 찾고, 꺼져 있으면 켜고, 없으면 만들기
+        id: server
+        env:
+          TAG_KEY: ${{ secrets.EC2_TAG_KEY || 'Name' }}
+          TAG_VALUE: ${{ secrets.EC2_TAG_VALUE || 'ysu-3a-team-7' }}
+          SECURITY_GROUP_ID: ${{ secrets.EC2_SECURITY_GROUP_ID || 'sg-0525f27d7867dff20' }}
+          INSTANCE_TYPE: ${{ secrets.EC2_INSTANCE_TYPE || 't3.micro' }}
+          AMI_ID: ${{ secrets.EC2_AMI_ID }}
+          SUBNET_ID: ${{ secrets.EC2_SUBNET_ID }}
+          KEY_NAME: ${{ secrets.EC2_KEY_NAME }}
+          IAM_PROFILE: ${{ secrets.EC2_IAM_PROFILE }}
+          SSH_PUBLIC_KEY: ${{ steps.key.outputs.pub }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          BRANCH: ${{ github.ref_name }}
+        run: bash scripts/ensure-ec2.sh
+
+      - name: SSH 가 열릴 때까지 기다리기 (최대 약 3분)
+        env:
+          EC2_HOST: ${{ steps.server.outputs.host }}
+        run: |
+          for i in $(seq 1 36); do
+            if timeout 3 bash -c "</dev/tcp/${EC2_HOST}/22" 2>/dev/null; then echo "SSH 열림"; exit 0; fi
+            echo "대기 중 ($i/36)"; sleep 5
+          done
+          echo "SSH 가 열리지 않았습니다 (보안 그룹 22번 포트 또는 서버 부팅 확인)" >&2
+          exit 1
+
+      - name: 새로 만든 서버의 초기 설정(Docker 설치·clone) 완료 대기 (최대 약 6분)
+        if: steps.server.outputs.created == 'true'
+        env:
+          EC2_HOST: ${{ steps.server.outputs.host }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          for i in $(seq 1 36); do
+            if ssh -i ~/.ssh/ec2_key -o ConnectTimeout=5 "${EC2_USER:-ec2-user}@${EC2_HOST}" 'test -f ~/.bootstrap-done' 2>/dev/null; then
+              echo "초기 설정 완료"; exit 0
+            fi
+            echo "초기 설정 중 ($i/36)"; sleep 10
+          done
+          echo "초기 설정이 끝나지 않았습니다 (EC2 의 /var/log/cloud-init-output.log 확인)" >&2
+          exit 1
+
+      - name: EC2 에서 배포 스크립트 실행
+        env:
+          EC2_HOST: ${{ steps.server.outputs.host }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          DEPLOY_BRANCH: ${{ github.ref_name }}   # master 반영이면 master, 시험 푸시면 그 브랜치
+        run: |
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/ec2_key "${EC2_USER:-ec2-user}@${EC2_HOST}" \
-            "cd ~/cloud-mlops-team-7 && bash scripts/deploy-ec2.sh master"
+            "cd ~/cloud-mlops-team-7 && bash scripts/deploy-ec2.sh ${DEPLOY_BRANCH}"
