@@ -11,6 +11,9 @@
 #       → /health 의 build_id 가 새 커밋과 같은지 확인 → 실패하면 이전 이미지로 복구
 set -euo pipefail
 
+# 아래 전체를 함수로 감싸서 bash 가 먼저 통째로 읽게 한다.
+# (git checkout/pull 이 이 파일 자신을 바꿔도 실행 중인 내용이 꼬이지 않도록)
+main() {
 BRANCH="${1:-master}"
 NAME="${CONTAINER_NAME:-recsys}"
 PORT="${PORT:-8080}"
@@ -76,3 +79,7 @@ if [ -n "${PREV_IMAGE}" ]; then
   ${DOCKER} run -d --name "${NAME}" -p "${PORT}:8080" --restart unless-stopped "${PREV_IMAGE}" >/dev/null
 fi
 exit 1
+}
+
+main "$@"
+exit $?

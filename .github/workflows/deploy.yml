@@ -76,7 +76,7 @@ jobs:
           IAM_PROFILE: ${{ secrets.EC2_IAM_PROFILE }}
           SSH_PUBLIC_KEY: ${{ steps.key.outputs.pub }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
-          BRANCH: master
+          BRANCH: ${{ github.ref_name }}
         run: bash scripts/ensure-ec2.sh
 
       - name: SSH 가 열릴 때까지 기다리기 (최대 약 3분)
@@ -110,7 +110,8 @@ jobs:
         env:
           EC2_HOST: ${{ steps.server.outputs.host }}
           EC2_USER: ${{ secrets.EC2_USER }}
+          DEPLOY_BRANCH: ${{ github.ref_name }}   # master 반영이면 master, 시험 푸시면 그 브랜치
         run: |
           ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
           ssh -i ~/.ssh/ec2_key "${EC2_USER:-ec2-user}@${EC2_HOST}" \
-            "cd ~/cloud-mlops-team-7 && bash scripts/deploy-ec2.sh master"
+            "cd ~/cloud-mlops-team-7 && bash scripts/deploy-ec2.sh ${DEPLOY_BRANCH}"
