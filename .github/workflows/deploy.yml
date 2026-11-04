@@ -1,0 +1,48 @@
+# 검사(PR·push) 와 배포(master 에 반영될 때만)
+# 파일 위치: D:\ysu_26_2\MLOPS\.github\workflows\deploy.yml
+#
+# GitHub 레포 Settings → Secrets and variables → Actions 에 필요:
+#   EC2_HOST     EC2 퍼블릭 DNS 또는 IP
+#   EC2_SSH_KEY  EC2 접속용 개인 키 전체 내용
+#   (선택) EC2_USER  기본 ec2-user
+name: test-and-deploy
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false   # 배포가 겹치지 않게 줄 세운다
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements-dev.txt
+      - run: python recsys/data_prep.py && python recsys/train.py
+      - run: python -m pytest recsys/tests -q
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request'   # PR 은 검사만, 배포는 master 반영·수동 실행일 때만
+    runs-on: ubuntu-latest
+    steps:
+      - name: EC2 에서 배포 스크립트 실행
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2_key && chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+          ssh -i ~/.ssh/ec2_key "${EC2_USER:-ec2-user}@${EC2_HOST}" \
+            "cd ~/cloud-mlops-team-7 && bash scripts/deploy-ec2.sh master"
