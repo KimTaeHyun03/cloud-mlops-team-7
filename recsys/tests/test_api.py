@@ -21,6 +21,7 @@ def test_health():
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json()["model_version"]
+    assert "build_id" in r.json()
 
 
 def test_predict_ok():
@@ -153,3 +154,31 @@ def test_error_request_is_logged_with_header_id(tmp_path, monkeypatch):
     log = _last_log(tmp_path, monkeypatch)
     assert r.status_code == 422
     assert log["request_id"] == r.headers["x-request-id"] and log["error_type"] == "validation_error"
+
+
+def test_feedback_links_actual_rating_to_request_id(tmp_path, monkeypatch):
+    p = client.post("/predict", json={"user_id": 1, "movie_id": 318}).json()
+    r = client.post("/feedback", json={"request_id": p["request_id"], "movie_id": 318, "rating": 4.5})
+    assert r.status_code == 200 and r.json()["logged"] and r.json()["reward"] == 1.0
+    log = _last_log(tmp_path, monkeypatch)
+    assert log["event"] == "feedback" and log["request_id"] == p["request_id"]
+    assert log["actual_rating"] == 4.5 and log["predicted_rating"] == p["predicted_rating"]
+    assert log["abs_error"] == round(abs(p["predicted_rating"] - 4.5), 3)
+
+
+def test_feedback_on_recommended_item_and_items_logged(tmp_path, monkeypatch):
+    rec = client.post("/recommend", json={"user_id": 1, "k": 3}).json()
+    logged = _last_log(tmp_path, monkeypatch)["prediction"]["items"]
+    assert [i["movie_id"] for i in logged] == [m["movieId"] for m in rec["items"]]
+    assert [i["rank"] for i in logged] == [1, 2, 3]
+    mid = rec["items"][0]["movieId"]
+    r = client.post("/feedback", json={"request_id": rec["request_id"], "movie_id": mid, "rating": 2.0})
+    assert r.status_code == 200 and r.json()["reward"] == 0.0
+
+
+def test_feedback_rejects_unknown_request_wrong_movie_and_bad_rating():
+    p = client.post("/predict", json={"user_id": 1, "movie_id": 318}).json()
+    assert client.post("/feedback", json={"request_id": "0" * 12, "movie_id": 318, "rating": 4.0}).status_code == 404
+    assert client.post("/feedback", json={"request_id": p["request_id"], "movie_id": 1, "rating": 4.0}).status_code == 422
+    assert client.post("/feedback", json={"request_id": p["request_id"], "movie_id": 318, "rating": 4.3}).status_code == 422
+    assert client.post("/feedback", json={"request_id": "zz", "movie_id": 318, "rating": 4.0}).status_code == 422

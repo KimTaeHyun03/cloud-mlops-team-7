@@ -2,6 +2,42 @@
 
 > **주제 변경 (2026-10-14):** 기존 "추천 Top-N" 중심에서 **"유저-영화 평점 예측"** 중심으로 변경. 주 기능은 `user_id + movie_id → 예상 평점`이고, 추천 Top-N은 같은 모델의 예측 평점 순 정렬로 얻는 **보조 기능**이다. 아래 본문에 "추천"으로 남은 표현은 이 변경에 맞춰 읽는다. 지표는 RMSE/MAE(주), 추천 보조 지표는 NDCG@10 등. 주제 변경에 맞춘 세부 규칙은 아래 "0. 평점 예측 주제 규칙"이 우선한다.
 
+## 서비스 정의 (현행, 2026-11-04 · 9주차 기준)
+
+> 아래가 현재 서비스의 기준이다. 본문 1·2·4장의 "추천 Top-N 중심" 설명과 다르면 이 절이 우선한다. 지표 숫자는 `artifacts/metrics.json`(학습 2026-10-14, 데이터 해시 `8c9cb1d16ee9`)의 실제 값이다.
+
+| 항목 | 내용 |
+|---|---|
+| 한 줄 정의 | 영화 서비스에서 **유저가 아직 안 본 영화에 줄 평점**을 미리 알려주는 예측 API와 확인 화면 |
+| 누가 쓰나 | ① 영화를 고르려는 이용자(내가 줄 평점 미리보기, 비슷한 취향 유저 보기) ② 서비스 운영자·팀원(예측 품질 검증, 요청 기록으로 모델 개선 근거 수집) TODO(확인 필요): 수업 양식에 맞는 사용자·상황 문구가 따로 있으면 교체 |
+| 어떤 상황에 쓰나 | 영화 상세·목록 화면에서 "이 유저에게 이 영화는 몇 점일까"를 보여줄 때, 평점 순 추천 목록을 만들 때, 예측과 실제 별점을 비교할 때 |
+| 입력 | `user_id`(양의 정수), `movie_id`(양의 정수). 추천은 `user_id`, `k`(1~50), `exclude_seen`. 내 평점으로 추천은 영화별 평점 3~200개(0.5 단위) |
+| 출력 | `predicted_rating`(0.5~5.0), 영화 제목·장르·줄거리, `likely_like`(예측≥4.0), `fallback`(학습에 없는 유저·영화면 평균으로 대체)와 사유, (있으면) `actual_rating`, `model_version`, `latency_ms`, `request_id` |
+| 모델 | `svd_bias` (평균중심 SVD + 유저·영화 편향, 잠재차원 8). 비교: GlobalMean, UserMean, ItemMean, SVD(32) |
+| 성능 (test 20,164건) | RMSE **0.905**, MAE **0.693**, fallback 비율 8.4%. 최선 베이스라인 UserMean은 RMSE 0.967, MAE 0.750 → 베이스라인보다 낮아 성공 기준 충족 |
+| 주의 | 추천 지표(NDCG@10 0.031)는 `svd`(0.092)·`item_mean`(0.036)보다 낮다. 모델 선정 기준이 RMSE이기 때문이며, 추천은 보조 기능이다 |
+| 데이터 | MovieLens ml-latest-small (유저 610명, 영화 9,742편, 평점 100,836건). 유저별 시간순 80/20 분할 |
+
+### 제공 기능 (엔드포인트)
+
+| 메서드 | 경로 | 용도 |
+|---|---|---|
+| POST | `/predict` | 주 기능: 유저·영화 → 예상 평점 |
+| POST | `/recommend` | 보조: 예측 평점 순 Top-N (본 영화 제외 선택) |
+| POST | `/recommend/from-ratings` | 내가 매긴 평점으로 추천 + 비슷한 유저 |
+| POST | `/feedback` | 응답의 `request_id`와 실제 별점을 연결해 기록 |
+| GET | `/health` | 상태, 모델 버전, 데이터 해시, **`build_id`(배포한 커밋과 대조)** |
+| GET | `/movies`, `/users`, `/users/{id}/history`, `/samples`, `/popular` | 화면용 검색·목록·검증 샘플 |
+| GET | `/` | 웹 화면 (`recsys/static/`) |
+
+### 운영·기록 (8~9주차에 추가)
+
+- 예측 요청마다 `request_id`를 붙여 JSON 로그로 남긴다(`recsys/request_log.py`). 환경변수 `RECSYS_LOG_CONFIG`가 있으면 CloudWatch Logs로 전송하고, 기간별로 S3에 보관·대조한다(`recsys/archive_logs.py`). 설정 `config.json`은 커밋하지 않는다(예시: `recsys/config.example.json`).
+- 컨테이너: 루트 `Dockerfile`로 이미지를 만든다. `docker build -t recsys-api:<커밋> --build-arg BUILD_ID=<커밋> .` 포트 8080, 비root 실행, HEALTHCHECK 포함. 로컬 검사(커밋 `c22714c`): `/health` 200, `/predict` 200, 문자 입력 422.
+- 배포 대상(EC2/ECS)·ECR 저장소·GitHub Actions는 **아직 미정** TODO(확인 필요): 7팀에 허용된 EC2/ECR/ECS 정보와 권한.
+
+---
+
 이 파일은 Claude Code가 이 레포에서 작업할 때 읽는 가이드다. 작업 전에 끝까지 읽고, 단계 순서대로 진행한다.
 
 > ## ⚠️ 가장 중요: 이번 작업 범위

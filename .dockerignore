@@ -1,0 +1,21 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+mlruns
+logs
+dist
+4주차
+5주차
+team-start-kit
+members
+models
+inputs
+data/ml-latest-small/ratings.csv
+data/ml-latest-small/tags.csv
+"Top Rated Movies.csv"
+top_rated_movies.csv
+recsys/tests
+config.json
+*.zip

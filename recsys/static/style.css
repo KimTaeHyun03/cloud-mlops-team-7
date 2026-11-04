@@ -86,3 +86,6 @@ h3 { margin: 16px 0 8px; font-size: .95rem; }
 .rc-ov.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .rec-card .more { align-self: flex-start; font-size: .8rem; color: var(--accent); background: none; padding: 0; }
 @media (max-width: 640px) { .rec-grid { grid-template-columns: 1fr; } }
+
+.rc-fb { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; font-size: 0.85rem; }
+.fb-select { padding: 2px 4px; }

@@ -136,7 +136,29 @@ function ratingMeter(value) {
     el("div", { class: "meter-fill", style: `width:${Math.round((value / 5) * 100)}%` }));
 }
 
-function myRecCard(m, rank) {
+function feedbackRow(requestId, movieId) {
+  const sel = el("select", { class: "fb-select", "aria-label": "실제 평점" }, el("option", { value: "" }, "평점 선택"));
+  for (let v = 0.5; v <= 5; v += 0.5) sel.append(el("option", { value: String(v) }, `★${v.toFixed(1)}`));
+  const msg = el("span", { class: "muted fb-msg" });
+  const btn = el("button", { type: "button", class: "more", onclick: async () => {
+    if (!sel.value) { msg.textContent = "평점을 먼저 선택하세요"; return; }
+    btn.disabled = true;
+    try {
+      const r = await api("/feedback", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: requestId, movie_id: movieId, rating: Number(sel.value) }),
+      });
+      msg.textContent = `기록됨 ✓ (예측 ${r.predicted_rating.toFixed(1)} · 실제 ${r.actual_rating.toFixed(1)})`;
+    } catch (e) {
+      msg.textContent = e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  } }, "평점 보내기");
+  return el("div", { class: "rc-fb" }, el("span", { class: "muted" }, "이 영화를 봤다면 "), sel, btn, msg);
+}
+
+function myRecCard(m, rank, requestId) {
   const t = prettyTitle(m.title);
   const head = el("div", { class: "rc-head" },
     el("span", { class: "rc-rank" }, String(rank)),
@@ -152,6 +174,7 @@ function myRecCard(m, rank) {
     } }, "줄거리 더 보기");
     card.append(ov, more);
   }
+  if (requestId) card.append(feedbackRow(requestId, m.movieId));
   return card;
 }
 
@@ -184,7 +207,7 @@ async function doMyRecommend() {
       el("ul", { class: "su-grid" }, ...data.similar_users.map(similarUserCard)));
     $("my-rec-list").before(el("h3", { id: "my-rec-title" }, `추천 영화 TOP ${data.items.length}`,
       el("span", { class: "muted" }, " · 이 유저들과 내 평점으로 계산한 예상 평점 순")));
-    data.items.forEach((m, i) => $("my-rec-list").append(myRecCard(m, i + 1)));
+    data.items.forEach((m, i) => $("my-rec-list").append(myRecCard(m, i + 1, data.request_id)));
   } catch (e) {
     setStatus($("my-status"), e.message, true);
   } finally {
