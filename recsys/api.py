@@ -6,6 +6,7 @@ FastAPI 평점 예측 서버 (API + 화면 서빙)
   uvicorn recsys.api:app --port 8000
   # 브라우저: http://127.0.0.1:8000/   API 문서: http://127.0.0.1:8000/docs
 """
+import os
 import sys
 import threading
 import time
@@ -150,7 +151,8 @@ def popular(limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0, l
 @app.get("/health")
 def health():
     return {"status": "ok", "model_version": rec.version, "data_hash": rec.data_hash,
-            "model_name": rec.model.name}
+            "model_name": rec.model.name,
+            "build_id": os.environ.get("BUILD_ID", "unknown")}   # 배포한 커밋과 대조하는 값 (docker build --build-arg BUILD_ID=...)
 
 
 @app.post("/predict")

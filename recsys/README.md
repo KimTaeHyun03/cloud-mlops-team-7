@@ -6,7 +6,7 @@
 ## 실행 방법 (PowerShell, 레포 루트 `D:\ysu_26_2\MLOPS`)
 
 ```powershell
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # 실행용 requirements.txt + 테스트용(pytest, httpx)
 python recsys/data_prep.py        # data/processed/train.csv, test.csv 생성
 python recsys/train.py            # artifacts/model.joblib, metrics.json 생성
 pytest recsys/tests               # 26개 테스트
