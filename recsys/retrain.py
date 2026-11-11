@@ -17,9 +17,11 @@ r"""
   3. 걸러내기      학습에 없는 유저·영화, 이미 원본 데이터에 있는 (유저, 영화) 쌍은 제외 (test 누수 방지)
   4. 누적 저장      data/feedback/feedback_ratings.csv 에 합치고 (유저, 영화)당 가장 늦은 평점만 남김
   5. 트리거        현재 모델이 아직 학습하지 않은 피드백이 RETRAIN_MIN_NEW_FEEDBACK 이상일 때만 (--force 로 무시)
-  6. 재학습        현재 모델과 같은 종류·하이퍼파라미터로 train + 피드백 전체를 다시 학습
+  6. 재학습        현재 모델과 같은 종류·하이퍼파라미터로 train + 학습용 피드백을 다시 학습.
+                   피드백은 (유저, 영화) 쌍의 해시로 학습용/평가용(기본 30%)으로 고정 분할하고, 평가용은 어떤 재학습에도 쓰지 않는다
   7. 게이트        같은 test.csv(피드백은 절대 안 섞임)로 현재/후보 RMSE 비교.
                    후보가 RETRAIN_MAX_RMSE_REGRESSION 넘게 나쁘면 교체하지 않는다
+     피드백 비교   학습에 쓰지 않은 평가용 피드백으로 현재/후보의 RMSE·MAE, 행별 오차 변화와 표준오차를 보고한다 (교체 판단에는 쓰지 않음)
   8. 교체          후보는 artifacts/candidates/<버전>/ 에 항상 남기고, 통과하면 이전 모델을 artifacts/previous/<버전>/ 에
                    백업한 뒤 artifacts/model.joblib, metrics.json 을 교체. 기록은 artifacts/retrain_history.jsonl
 종료 코드: 0 = 교체함 또는 건너뜀 또는 dry-run, 2 = 후보가 게이트를 통과하지 못함 (CI 에서 감지용)
@@ -174,6 +176,40 @@ def merge_store(old: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:
     return both.drop_duplicates(["userId", "movieId"], keep="last").reset_index(drop=True)
 
 
+# ---------- 4-1. 학습용 / 평가용 분할, 피드백 기준 전·후 비교 ----------
+def split_feedback(store: pd.DataFrame, eval_pct: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """피드백을 (학습용, 평가용)으로 나눈다. (유저, 영화) 쌍의 해시로 나누므로 같은 쌍은 언제나 같은 쪽에 간다.
+    그래서 평가용 평점은 이후 어떤 재학습에서도 학습에 쓰이지 않고, 피드백이 늘어나도 기존 쌍의 소속이 바뀌지 않는다."""
+    if store.empty or eval_pct <= 0:
+        return store, store.iloc[0:0]
+    bucket = np.array([int(hashlib.md5(f"{u}:{m}".encode()).hexdigest(), 16) % 100
+                       for u, m in zip(store.userId, store.movieId)])
+    is_eval = bucket < eval_pct
+    return store[~is_eval].reset_index(drop=True), store[is_eval].reset_index(drop=True)
+
+
+def feedback_eval(cur_model, cand_model, ev: pd.DataFrame) -> dict | None:
+    """학습에 쓰지 않은 피드백(평가용)으로 현재/후보 모델의 예측 오차를 같은 행끼리 비교한다.
+    mae_change 가 음수면 후보가 더 정확하다. 표준오차(se)는 행별 오차 변화의 평균에 대한 것이라, 건수가 적으면 크다."""
+    if ev.empty:
+        return None
+    u, m, y = ev.userId.to_numpy(), ev.movieId.to_numpy(), ev.rating.to_numpy()
+    cur_pred, _ = cur_model.predict_many(u, m)
+    cand_pred, _ = cand_model.predict_many(u, m)
+    cur_err, cand_err = np.abs(cur_pred - y), np.abs(cand_pred - y)
+    delta = cand_err - cur_err
+    n = len(ev)
+    return {
+        "n": n,
+        "current": {"rmse": float(np.sqrt(np.mean((cur_pred - y) ** 2))), "mae": float(cur_err.mean())},
+        "candidate": {"rmse": float(np.sqrt(np.mean((cand_pred - y) ** 2))), "mae": float(cand_err.mean())},
+        "mae_change": float(delta.mean()),
+        "mae_change_se": float(delta.std(ddof=1) / np.sqrt(n)) if n > 1 else None,
+        "better": int((delta < -1e-9).sum()), "worse": int((delta > 1e-9).sum()),
+        "same": int((np.abs(delta) <= 1e-9).sum()),
+    }
+
+
 # ---------- 5~8. 트리거 · 재학습 · 게이트 · 교체 ----------
 def _build_model(name: str, params: dict):
     cls = MODEL_CLASSES[name]
@@ -195,8 +231,9 @@ def _promote(cand_dir: Path, artifacts_dir: Path, old_version: str) -> None:
 def run(lines: list[str], train: pd.DataFrame, test: pd.DataFrame, movie_ids: set, *,
         artifacts_dir: Path = config.ARTIFACTS_DIR, store_path: Path = config.FEEDBACK_STORE_PATH,
         min_new: int = config.RETRAIN_MIN_NEW_FEEDBACK, max_regression: float = config.RETRAIN_MAX_RMSE_REGRESSION,
-        force: bool = False, dry_run: bool = False) -> dict:
+        force: bool = False, dry_run: bool = False, eval_pct: int | None = None) -> dict:
     artifacts_dir = Path(artifacts_dir)
+    pct = config.FEEDBACK_EVAL_PCT if eval_pct is None else eval_pct
     events, bad_lines = parse_events(lines)
     fb, stats = extract_feedback(events)
     stats["unparsable_lines"] = bad_lines
@@ -211,10 +248,12 @@ def run(lines: list[str], train: pd.DataFrame, test: pd.DataFrame, movie_ids: se
 
     bundle = joblib.load(artifacts_dir / "model.joblib")
     cur_metrics = json.loads((artifacts_dir / "metrics.json").read_text(encoding="utf-8"))
-    used = int(cur_metrics.get("retrain", {}).get("feedback_rows", 0))   # 현재 모델이 이미 학습한 피드백 수
-    pending = len(store) - used
+    fit_fb, eval_fb = split_feedback(store, pct)                         # 학습용 / 평가용 (평가용은 어떤 재학습에도 안 쓴다)
+    used = int(cur_metrics.get("retrain", {}).get("feedback_rows", 0))   # 현재 모델이 이미 학습한 (학습용) 피드백 수
+    pending = len(fit_fb) - used
     report = {"decision": "skip", "applied": False, "dry_run": dry_run, "log_stats": dict(stats),
-              "feedback_store_rows": len(store), "feedback_used_by_current": used, "feedback_pending": pending,
+              "feedback_store_rows": len(store), "feedback_fit_rows": len(fit_fb), "feedback_eval_rows": len(eval_fb),
+              "feedback_eval_pct": pct, "feedback_used_by_current": used, "feedback_pending": pending,
               "current_version": bundle["version"]}
 
     if len(store) == 0 or (pending < min_new and not force) or (pending <= 0):
@@ -224,9 +263,14 @@ def run(lines: list[str], train: pd.DataFrame, test: pd.DataFrame, movie_ids: se
 
     np.random.seed(config.SEED)
     name, params = cur_metrics["model_name"], cur_metrics.get("params", {})
-    merged = pd.concat([train[COLUMNS], store[COLUMNS]], ignore_index=True)
+    merged = pd.concat([train[COLUMNS], fit_fb[COLUMNS]], ignore_index=True)      # 평가용 피드백은 넣지 않는다
     candidate = _build_model(name, params).fit(merged)
     cur_m, cand_m = evaluate(bundle["model"], test), evaluate(candidate, test)   # 같은 고정 test, 피드백은 들어 있지 않다
+    fe = feedback_eval(bundle["model"], candidate, eval_fb)                      # 학습에 쓰지 않은 피드백으로 전/후 비교
+    prev_pct = cur_metrics.get("retrain", {}).get("feedback_eval_pct")
+    if fe is not None and "retrain" in cur_metrics and prev_pct != pct:
+        report["feedback_eval_warning"] = (f"현재 모델은 평가용 비율 {prev_pct}% 기준으로 학습돼 지금의 평가용 피드백을 이미 "
+                                           f"학습했을 수 있습니다. 이 비교는 현재 모델에 유리하게 나올 수 있습니다")
 
     ok = cand_m["rmse"] <= cur_m["rmse"] + max_regression
     now = datetime.now(timezone.utc)
@@ -237,19 +281,21 @@ def run(lines: list[str], train: pd.DataFrame, test: pd.DataFrame, movie_ids: se
         "current_metrics": {k: cur_m[k] for k in ("rmse", "mae", "ndcg@10")},
         "candidate_metrics": {k: cand_m[k] for k in ("rmse", "mae", "ndcg@10")},
         "rmse_delta": cand_m["rmse"] - cur_m["rmse"], "max_regression": max_regression,
-        "train_rows": {"base": len(train), "feedback": len(store)}})
+        "feedback_eval": fe,
+        "train_rows": {"base": len(train), "feedback": len(fit_fb), "feedback_eval": len(eval_fb)}})
     if dry_run:
         return report
 
     cand_dir = artifacts_dir / "candidates" / version
     cand_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump({"model": candidate, "version": version, "data_hash": data_hash,
-                 "parent_version": bundle["version"], "feedback_rows": len(store)}, cand_dir / "model.joblib")
+                 "parent_version": bundle["version"], "feedback_rows": len(fit_fb)}, cand_dir / "model.joblib")
     (cand_dir / "metrics.json").write_text(json.dumps({
         "model_version": version, "model_name": name, "params": params, "metrics": cand_m,
         "data_hash": data_hash, "trained_at": now.isoformat(timespec="seconds"), "seed": config.SEED,
         "relevant_threshold": config.RELEVANT_THRESHOLD,
-        "retrain": {"parent_version": bundle["version"], "feedback_rows": len(store),
+        "retrain": {"parent_version": bundle["version"], "feedback_rows": len(fit_fb),
+                    "feedback_eval_pct": pct, "feedback_eval_rows": len(eval_fb), "feedback_eval": fe,
                     "base_train_rows": len(train), "parent_metrics": cur_m}},
         indent=2, ensure_ascii=False), encoding="utf-8")
     if ok:
@@ -264,8 +310,9 @@ def print_report(r: dict) -> None:
     print("== 로그 처리 ==")
     for k, v in sorted(r["log_stats"].items()):
         print(f"  {k}: {v}")
-    print(f"피드백 누적 {r['feedback_store_rows']}건 / 현재 모델이 학습한 {r['feedback_used_by_current']}건 "
-          f"/ 새로 쓸 수 있는 {r['feedback_pending']}건")
+    print(f"피드백 누적 {r['feedback_store_rows']}건 = 학습용 {r['feedback_fit_rows']}건 + 평가용 {r['feedback_eval_rows']}건 "
+          f"(평가용 {r['feedback_eval_pct']}%) / 현재 모델이 학습한 {r['feedback_used_by_current']}건 "
+          f"/ 새로 쓸 수 있는 학습용 {r['feedback_pending']}건")
     if r["decision"] == "skip":
         print(f"건너뜀: {r['reason']}")
         return
@@ -274,6 +321,22 @@ def print_report(r: dict) -> None:
     print(f"{'현재':<10}{c['rmse']:>9.4f}{c['mae']:>9.4f}{c['ndcg@10']:>10.4f}   {r['current_version']}")
     print(f"{'후보':<10}{n['rmse']:>9.4f}{n['mae']:>9.4f}{n['ndcg@10']:>10.4f}   {r['new_version']}")
     print(f"RMSE 변화 {r['rmse_delta']:+.4f} (허용 악화 {r['max_regression']})")
+    fe = r.get("feedback_eval")
+    if fe is None:
+        print("\n피드백 기준 비교: 평가용 피드백이 없어 생략 (--eval-pct 로 비율을 정하거나 피드백을 더 모으세요)")
+    else:
+        se = f" ± {fe['mae_change_se']:.3f}(표준오차)" if fe["mae_change_se"] is not None else ""
+        print(f"\n피드백 기준 비교: 학습에 쓰지 않은 피드백 {fe['n']}건")
+        print(f"{'':<10}{'RMSE':>9}{'MAE':>9}")
+        print(f"{'현재':<10}{fe['current']['rmse']:>9.4f}{fe['current']['mae']:>9.4f}")
+        print(f"{'후보':<10}{fe['candidate']['rmse']:>9.4f}{fe['candidate']['mae']:>9.4f}")
+        print(f"MAE 변화 {fe['mae_change']:+.4f}{se} / 후보가 더 정확 {fe['better']}건 · 더 나쁨 {fe['worse']}건 · 같음 {fe['same']}건")
+        if fe["n"] < 30:
+            print(f"주의: 평가용이 {fe['n']}건뿐이라 우연일 수 있습니다 (참고용)")
+        elif fe["mae_change_se"] and abs(fe["mae_change"]) < 2 * fe["mae_change_se"]:
+            print("주의: 변화가 표준오차의 2배 안이라 뚜렷한 차이라고 보기 어렵습니다")
+    if r.get("feedback_eval_warning"):
+        print("경고:", r["feedback_eval_warning"])
     verdict = {"promote": "통과 -> 교체", "reject": "실패 -> 교체하지 않음"}[r["decision"]]
     print(f"결과: {verdict}" + (" [dry-run: 저장·교체 안 함]" if r["dry_run"] else ""))
     if r["applied"]:
@@ -287,9 +350,13 @@ def main() -> int:
     ap.add_argument("--start", help="--config 와 함께: UTC 시작, 예: 2026-11-01T00:00:00Z")
     ap.add_argument("--end", help="--config 와 함께: UTC 끝")
     ap.add_argument("--min-new", type=int, default=config.RETRAIN_MIN_NEW_FEEDBACK)
+    ap.add_argument("--eval-pct", type=int, default=None,
+                    help=f"피드백 중 학습에 쓰지 않고 전/후 비교에만 쓸 비율(%%). 기본 {config.FEEDBACK_EVAL_PCT}, 0 이면 전부 학습에 사용")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
+    if a.eval_pct is not None and not 0 <= a.eval_pct <= 90:
+        ap.error("--eval-pct 는 0~90 이어야 합니다")
 
     if a.config:
         if not (a.start and a.end):
@@ -309,7 +376,7 @@ def main() -> int:
     train = pd.read_csv(config.PROCESSED_DIR / "train.csv")
     test = pd.read_csv(config.PROCESSED_DIR / "test.csv")
     movie_ids = set(pd.read_csv(config.RAW_DIR / "movies.csv", usecols=["movieId"]).movieId)
-    report = run(lines, train, test, movie_ids, min_new=a.min_new, force=a.force, dry_run=a.dry_run)
+    report = run(lines, train, test, movie_ids, min_new=a.min_new, force=a.force, dry_run=a.dry_run, eval_pct=a.eval_pct)
     print_report(report)
     return 2 if report["decision"] == "reject" else 0
 
