@@ -206,6 +206,12 @@ def samples(n: int = Query(30, ge=1, le=200)):
     return rec.samples(n)
 
 
+@app.get("/compare")
+def compare(n: int = Query(30, ge=1, le=200)):
+    """검증 표용 재학습 전/후 비교. 재학습한 모델이 아니면 {"available": false}"""
+    return rec.compare_samples(n)
+
+
 @app.get("/")
 def index():
     return FileResponse(config.STATIC_DIR / "index.html")

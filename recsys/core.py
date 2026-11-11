@@ -37,7 +37,23 @@ class Recommender:
         self.model = bundle["model"]
         self.version = bundle["version"]
         self.data_hash = bundle["data_hash"]
+        self.feedback_rows = bundle.get("feedback_rows")                 # 재학습한 모델이면 학습에 쓴 피드백 수
+        self.prev_model, self.prev_version = self._load_previous(Path(model_path), bundle.get("parent_version"))
         self._load_metadata()
+
+    @staticmethod
+    def _load_previous(model_path: Path, parent_version):
+        """재학습한 모델이면 재학습 직전 모델(retrain.py 가 previous/<버전>/ 에 백업)을 읽는다. 검증 표의 '전' 값이다.
+        재학습 이력이 없거나 백업이 없으면 (None, None)."""
+        if not parent_version:
+            return None, None
+        path = model_path.parent / "previous" / str(parent_version) / "model.joblib"
+        if not path.exists():
+            return None, None
+        try:
+            return joblib.load(path)["model"], str(parent_version)
+        except Exception:   # 백업이 깨져 있어도 서비스는 떠야 한다
+            return None, None
 
     # ---------- 메타데이터 ----------
     def _load_metadata(self):
@@ -156,6 +172,29 @@ class Recommender:
         t = t.sample(n=min(n, len(t)), random_state=config.SEED)
         return [{"user_id": int(u), "movie_id": int(m), "title": self.titles.get(int(m)), "actual_rating": float(r)}
                 for u, m, r in zip(t.userId, t.movieId, t.rating)]
+
+    def compare_samples(self, n: int = 30) -> dict:
+        """검증 표용: 재학습한 모델이면 같은 test 샘플을 '이전 모델'과 '현재 모델'로 나란히 예측한다.
+        샘플은 이전 모델 기준으로 뽑아 재학습 전 화면에서 보던 행과 같다. 재학습 이력이 없으면 available=False."""
+        base = {"available": False, "model_version": self.version, "previous_version": None,
+                "feedback_rows": self.feedback_rows, "items": []}
+        if self.prev_model is None:
+            return base
+        known = lambda m: self.test.userId.isin(m.user2idx) & self.test.movieId.isin(m.item2idx)   # noqa: E731
+        t = self.test[known(self.prev_model) & known(self.model)]
+        t = t.sample(n=min(n, len(t)), random_state=config.SEED)
+        u, mv, y = t.userId.to_numpy(), t.movieId.to_numpy(), t.rating.to_numpy()
+        prev, _ = self.prev_model.predict_many(u, mv)
+        cur, _ = self.model.predict_many(u, mv)
+        items = [{"user_id": int(a), "movie_id": int(b), "title": self.titles.get(int(b)), "actual_rating": float(r),
+                  "previous_prediction": round(float(p0), 3), "prediction": round(float(p1), 3),
+                  "change": round(float(p1 - p0), 3)}
+                 for a, b, r, p0, p1 in zip(u, mv, y, prev, cur)]
+        return {**base, "available": True, "previous_version": self.prev_version, "items": items,
+                "summary": {"n": len(items),
+                            "mae_previous": round(float(np.abs(prev - y).mean()), 4),
+                            "mae_current": round(float(np.abs(cur - y).mean()), 4),
+                            "changed_rows": int((np.abs(cur - prev) > 0.005).sum())}}
 
 
 _instance = None
