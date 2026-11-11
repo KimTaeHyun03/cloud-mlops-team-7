@@ -185,7 +185,7 @@ def test_force_runs_below_threshold_but_not_without_feedback(env):
     r = retrain.run(_many_feedback(3), train, test, MOVIE_IDS, artifacts_dir=art, store_path=store,
                     min_new=50, force=True, max_regression=1.0)
     assert r["decision"] == "promote"
-    r2 = retrain.run([], train, test, MOVIE_IDS, artifacts_dir=art, store_path=store / ".." / "none.csv", min_new=50, force=True)
+    r2 = retrain.run([], train, test, MOVIE_IDS, artifacts_dir=art, store_path=store.parent / "none.csv", min_new=50, force=True)
     assert r2["decision"] == "skip"
 
 
