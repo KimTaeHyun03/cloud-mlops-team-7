@@ -216,9 +216,67 @@ async function doMyRecommend() {
 }
 
 // ---------- 2. 검증 (예측 vs 실제 평점) ----------
+const VERIFY_HEAD = ["유저", "영화", "예측", "실제", "오차"];
+const COMPARE_HEAD = ["유저", "영화", "실제", "이전 모델 예측", "현재 모델 예측", "변화", "현재 오차"];
+
+function setVerifyHead(labels) {
+  $("verify-table").tHead.replaceChildren(el("tr", {}, ...labels.map((t) => el("th", {}, t))));
+}
+
+function signed(x, digits = 2) {
+  return (x >= 0 ? "+" : "") + x.toFixed(digits);
+}
+
+// 재학습한 모델이면 같은 샘플 30건을 재학습 전(이전 모델)·후(현재 모델)로 나란히 보여 준다.
+function renderCompare(cmp) {
+  setVerifyHead(COMPARE_HEAD);
+  const tbody = $("verify-table").tBodies[0];
+  tbody.replaceChildren();
+  for (const s of cmp.items) {
+    const errPrev = Math.abs(s.previous_prediction - s.actual_rating);
+    const errCur = Math.abs(s.prediction - s.actual_rating);
+    const diff = s.prediction - s.actual_rating;
+    const moved = Math.abs(s.change) > 0.005;
+    tbody.append(el("tr", {},
+      el("td", {}, String(s.user_id)),
+      el("td", { class: "title" }, s.title || String(s.movie_id)),
+      el("td", {}, s.actual_rating.toFixed(1)),
+      el("td", {}, s.previous_prediction.toFixed(2)),
+      el("td", {}, s.prediction.toFixed(2)),
+      el("td", { class: !moved ? "" : errCur < errPrev ? "err-good" : "err-bad" }, signed(s.change, 3)),
+      el("td", { class: Math.abs(diff) <= 0.5 ? "err-good" : "err-bad" }, signed(diff))));
+  }
+  const m = cmp.summary;
+  const fb = cmp.feedback_rows != null ? ` · 학습에 쓴 피드백 ${cmp.feedback_rows}건` : "";
+  setStatus($("verify-summary"),
+    `재학습 전(${cmp.previous_version}) → 후(${cmp.model_version}) · 샘플 ${m.n}건 · ` +
+    `평균 절대 오차 ${m.mae_previous.toFixed(3)} → ${m.mae_current.toFixed(3)} · ` +
+    `예측이 바뀐 행 ${m.changed_rows}/${m.n}${fb} · 변화 칸: 초록=실제에 더 가까워짐, 빨강=멀어짐`);
+}
+
 async function doVerify() {
   const btn = $("verify-btn");
   btn.disabled = true;
+  setStatus($("verify-summary"), "예측 중…");
+  try {
+    const cmp = await api("/compare?n=30");
+    if (cmp.available) {
+      renderCompare(cmp);
+      btn.disabled = false;
+      return;
+    }
+  } catch (e) {
+    // /compare 를 쓸 수 없으면 아래의 기존 방식으로 보여 준다
+  }
+  btn.disabled = false;
+  await verifyCurrentOnly();
+}
+
+// 재학습 이력이 없을 때: 현재 모델의 예측과 실제 평점만 보여 준다
+async function verifyCurrentOnly() {
+  const btn = $("verify-btn");
+  btn.disabled = true;
+  setVerifyHead(VERIFY_HEAD);
   const tbody = $("verify-table").tBodies[0];
   tbody.replaceChildren();
   setStatus($("verify-summary"), "예측 중…");
