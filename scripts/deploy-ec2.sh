@@ -51,8 +51,21 @@ ${DOCKER} build -t "recsys-api:${SHA}" --build-arg "BUILD_ID=${SHA}" .
 ${DOCKER} inspect --format '이미지 지문: {{.Id}}' "recsys-api:${SHA}"
 
 echo "== 4. 컨테이너 교체"
+# CloudWatch 전송 설정은 비밀(자격증명)이 들어갈 수 있어 레포에 두지 않고 서버의 ~/recsys-log/ 에서 읽는다.
+#   ~/recsys-log/config.json  전송 설정 (recsys/config.example.json 형식). 있으면 전송을 켠다
+#   ~/recsys-log/aws.env      (선택) AWS_ACCESS_KEY_ID=... 줄들. EC2 에 IAM 역할이 있으면 필요 없다
+LOG_CFG="${RECSYS_LOG_CONFIG_FILE:-$HOME/recsys-log/config.json}"
+LOG_ENV="${RECSYS_LOG_ENV_FILE:-$HOME/recsys-log/aws.env}"
+RUN_OPTS=()
+if [ -f "${LOG_CFG}" ]; then
+  echo "CloudWatch 전송 설정 사용: ${LOG_CFG}"
+  RUN_OPTS+=(-v "${LOG_CFG}:/run/recsys/config.json:ro" -e RECSYS_LOG_CONFIG=/run/recsys/config.json)
+  if [ -f "${LOG_ENV}" ]; then RUN_OPTS+=(--env-file "${LOG_ENV}"); fi
+else
+  echo "CloudWatch 전송 설정 없음(${LOG_CFG}): 파일·stdout 로그만 남깁니다"
+fi
 ${DOCKER} rm -f "${NAME}" >/dev/null 2>&1 || true
-${DOCKER} run -d --name "${NAME}" -p "${PORT}:8080" --restart unless-stopped "recsys-api:${SHA}" >/dev/null
+${DOCKER} run -d --name "${NAME}" -p "${PORT}:8080" --restart unless-stopped "${RUN_OPTS[@]}" "recsys-api:${SHA}" >/dev/null
 
 echo "== 5. /health 로 build_id 검증 (최대 40초)"
 OK=0
@@ -73,6 +86,6 @@ ${DOCKER} logs --tail 30 "${NAME}" >&2 || true
 ${DOCKER} rm -f "${NAME}" >/dev/null 2>&1 || true
 if [ -n "${PREV_IMAGE}" ]; then
   echo "이전 이미지(${PREV_IMAGE})로 복구합니다" >&2
-  ${DOCKER} run -d --name "${NAME}" -p "${PORT}:8080" --restart unless-stopped "${PREV_IMAGE}" >/dev/null
+  ${DOCKER} run -d --name "${NAME}" -p "${PORT}:8080" --restart unless-stopped "${RUN_OPTS[@]}" "${PREV_IMAGE}" >/dev/null
 fi
 exit 1

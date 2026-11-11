@@ -34,7 +34,12 @@ def setup() -> logging.Logger:
         handler.setFormatter(fmt)
         logger.addHandler(handler)
     from recsys.cloudwatch_sink import build_from_env   # RECSYS_LOG_CONFIG 가 있을 때만 CloudWatch 로 전송
-    cw = build_from_env()
+    try:
+        cw = build_from_env()
+    except Exception as e:   # 자격증명·설정 문제로 서비스가 시작 못 하면 안 된다: 파일·stdout 로그만 쓰고 계속
+        print(f"[request_log] CloudWatch 전송을 켜지 못했습니다 (파일·stdout 로그만 사용): {type(e).__name__}: {e}",
+              file=sys.stderr)
+        cw = None
     if cw:
         cw.setFormatter(fmt)
         logger.addHandler(cw)
