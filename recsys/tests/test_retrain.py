@@ -24,6 +24,13 @@ N_USERS, N_MOVIES = 15, 40
 MOVIE_IDS = set(range(1, N_MOVIES + 1))
 
 
+@pytest.fixture(autouse=True)
+def _no_eval_split(monkeypatch):
+    """기존 테스트는 '피드백 전부를 학습에 쓴다'는 가정이라 분할을 끈다. 분할 테스트는 eval_pct 를 직접 준다."""
+    from recsys import config
+    monkeypatch.setattr(config, "FEEDBACK_EVAL_PCT", 0)
+
+
 def _base_data():
     rng = np.random.RandomState(0)
     rows = [(u, m, float(rng.choice([2.0, 3.0, 3.5, 4.0, 4.5, 5.0])), 1000 + m)
@@ -194,6 +201,103 @@ def test_baseline_model_params_are_filtered_to_constructor_args(env):
     (art / "metrics.json").write_text(json.dumps(
         {"model_name": "item_mean", "params": {"damping": 5}, "metrics": {}}), encoding="utf-8")   # ItemMean() 은 인자를 받지 않는다
     assert retrain._build_model("item_mean", {"damping": 5}).name == "item_mean"
+
+
+# ---------- 피드백 학습용/평가용 분할과 피드백 기준 전·후 비교 ----------
+def _grid_feedback():
+    """유저 1~15 x 영화 31~40 = 150쌍 (원본에 없는 쌍). 평점은 유저·영화에서 정해 고정."""
+    lines, i = [], 0
+    for u in range(1, N_USERS + 1):
+        for m in range(31, 41):
+            i += 1
+            lines.append(_fb(f"{i:012x}", m, [2.5, 3.5, 4.0, 4.5][(u + m) % 4], sec=i % 50, user=u))
+    return lines
+
+
+def _pairs(df):
+    return set(zip(df.userId.tolist(), df.movieId.tolist()))
+
+
+def test_split_is_disjoint_complete_and_stable_when_store_grows():
+    store = pd.DataFrame([(u, m, 4.0, 1) for u in range(1, 16) for m in range(31, 41)], columns=retrain.COLUMNS)
+    fit, ev = retrain.split_feedback(store, 30)
+    assert _pairs(fit).isdisjoint(_pairs(ev)) and _pairs(fit) | _pairs(ev) == _pairs(store)
+    assert 0 < len(ev) < len(store)
+    bigger = pd.concat([store, pd.DataFrame([(16, 31, 4.0, 2), (16, 32, 4.0, 2)], columns=retrain.COLUMNS)], ignore_index=True)
+    fit2, ev2 = retrain.split_feedback(bigger, 30)
+    assert _pairs(ev) <= _pairs(ev2) and _pairs(fit) <= _pairs(fit2)       # 피드백이 늘어도 기존 쌍의 소속은 그대로
+    f0, e0 = retrain.split_feedback(store, 0)
+    assert len(f0) == len(store) and e0.empty
+
+
+class _Const:
+    """항상 같은 값을 예측하는 가짜 모델"""
+    def __init__(self, value):
+        self.value = value
+
+    def predict_many(self, users, movies):
+        return np.full(len(users), self.value), np.zeros(len(users), dtype=bool)
+
+
+def test_feedback_eval_compares_same_rows_and_signs_the_change():
+    ev = pd.DataFrame([(1, 31, 4.0, 1), (2, 32, 4.0, 1)], columns=retrain.COLUMNS)
+    r = retrain.feedback_eval(_Const(3.0), _Const(3.5), ev)         # 현재 오차 1.0 -> 후보 오차 0.5
+    assert r["n"] == 2 and r["current"]["mae"] == 1.0 and r["candidate"]["mae"] == 0.5
+    assert r["mae_change"] == -0.5 and (r["better"], r["worse"], r["same"]) == (2, 0, 0)
+    assert r["current"]["rmse"] == 1.0 and r["candidate"]["rmse"] == 0.5
+    worse = retrain.feedback_eval(_Const(3.5), _Const(3.0), ev)
+    assert worse["mae_change"] == 0.5 and worse["worse"] == 2
+    assert retrain.feedback_eval(_Const(3.0), _Const(3.5), ev.iloc[0:0]) is None
+
+
+def test_eval_feedback_is_never_trained_on_and_is_reported(env):
+    train, test, art, store = env
+    r = retrain.run(_grid_feedback(), train, test, MOVIE_IDS, artifacts_dir=art, store_path=store,
+                    min_new=10, max_regression=1.0, eval_pct=30)
+    saved = pd.read_csv(store)
+    fit, ev = retrain.split_feedback(saved, 30)
+    assert len(saved) == 150 and r["feedback_fit_rows"] == len(fit) and r["feedback_eval_rows"] == len(ev) > 0
+    assert r["decision"] == "promote"
+    new = joblib.load(art / "model.joblib")
+    assert new["feedback_rows"] == len(fit)                                            # 학습용만 센다
+    model = new["model"]
+    assert len(model.R.nonzero()[0]) == len(train) + len(fit)                          # 평가용은 학습 행렬에 없다
+    for u, m in _pairs(ev):
+        if u in model.user2idx and m in model.item2idx:
+            assert model.R[model.user2idx[u], model.item2idx[m]] == 0
+    fe = r["feedback_eval"]
+    assert fe["n"] == len(ev) and fe["better"] + fe["worse"] + fe["same"] == len(ev)
+    meta = json.loads((art / "metrics.json").read_text(encoding="utf-8"))
+    assert meta["retrain"]["feedback_eval_pct"] == 30 and meta["retrain"]["feedback_eval"]["n"] == len(ev)
+
+
+def test_trigger_counts_only_training_feedback_and_second_run_skips(env):
+    train, test, art, store = env
+    lines = _grid_feedback()
+    r1 = retrain.run(lines, train, test, MOVIE_IDS, artifacts_dir=art, store_path=store, min_new=1000, eval_pct=30)
+    assert r1["decision"] == "skip" and r1["feedback_pending"] == r1["feedback_fit_rows"] < 150   # 평가용은 새 학습 건수에 안 센다
+    retrain.run(lines, train, test, MOVIE_IDS, artifacts_dir=art, store_path=store, min_new=10, max_regression=1.0, eval_pct=30)
+    r2 = retrain.run(lines, train, test, MOVIE_IDS, artifacts_dir=art, store_path=store, min_new=10, max_regression=1.0, eval_pct=30)
+    assert r2["decision"] == "skip" and r2["feedback_pending"] == 0
+
+
+def test_no_eval_split_means_no_feedback_comparison(env):
+    train, test, art, store = env
+    r = retrain.run(_many_feedback(12), train, test, MOVIE_IDS, artifacts_dir=art, store_path=store, min_new=10,
+                    max_regression=1.0, dry_run=True)                                  # 기본(fixture)은 분할 0%
+    assert r["feedback_eval"] is None and r["feedback_eval_rows"] == 0
+
+
+def test_report_prints_feedback_comparison_and_small_sample_warning(env, capsys):
+    train, test, art, store = env
+    r = retrain.run(_grid_feedback(), train, test, MOVIE_IDS, artifacts_dir=art, store_path=store,
+                    min_new=10, max_regression=1.0, eval_pct=30, dry_run=True)
+    retrain.print_report(r)
+    out = capsys.readouterr().out
+    assert "피드백 기준 비교" in out and "표준오차" in out and "평가용" in out
+    r["feedback_eval"]["n"] = 5
+    retrain.print_report(r)
+    assert "참고용" in capsys.readouterr().out
 
 
 # ---------- CloudWatch 경로 ----------

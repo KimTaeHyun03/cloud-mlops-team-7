@@ -42,3 +42,4 @@ FEEDBACK_DIR = ROOT / "data" / "feedback"
 FEEDBACK_STORE_PATH = FEEDBACK_DIR / "feedback_ratings.csv"   # 지금까지 모은 (유저, 영화, 실제 평점). 누적·중복 제거
 RETRAIN_MIN_NEW_FEEDBACK = 50        # 현재 모델이 아직 학습하지 않은 피드백이 이 개수 이상일 때만 재학습
 RETRAIN_MAX_RMSE_REGRESSION = 0.002  # 고정 test RMSE 가 현재 모델보다 이 값 넘게 나빠지면 교체하지 않음
+FEEDBACK_EVAL_PCT = 30               # 피드백 중 이 비율(%)은 학습에 쓰지 않고 재학습 전/후 비교(평가)에만 쓴다. 0 이면 전부 학습에 사용

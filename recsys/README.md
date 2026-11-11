@@ -167,6 +167,7 @@ CLI: `python recsys/core.py --input recsys/inputs/normal.json` (`unknown_user.js
 python recsys/retrain.py --dry-run --force          # logs/requests.jsonl 로 결과만 확인 (아무것도 쓰지 않음)
 python recsys/retrain.py                            # 새 피드백이 50건 이상이면 재학습·게이트·교체
 python recsys/retrain.py --log-file data.jsonl      # S3 에서 받은 파일 (여러 번 가능)
+python recsys/retrain.py --eval-pct 20              # 피드백 중 평가용으로 뺄 비율(기본 30%, 0 이면 전부 학습)
 python recsys/retrain.py --config config.json --start 2026-11-01T00:00:00Z --end 2026-11-11T00:00:00Z   # CloudShell
 ```
 
@@ -175,16 +176,19 @@ python recsys/retrain.py --config config.json --start 2026-11-01T00:00:00Z --end
 | 추출 | `event=feedback` 의 `user_id, movie_id, actual_rating`. `user_id` 가 없는 옛 로그는 `request_id` 로 같은 로그의 요청과 조인. 내 평점 추천(guest)은 학습 유저가 없어 제외 |
 | 걸러내기 | 원본에 없는 유저·영화 제외(가짜 유저 방지), 이미 train/test 에 있는 (유저, 영화) 쌍 제외(test 정답 누수 방지). (유저, 영화)가 겹치면 가장 늦은 평점 |
 | 누적 | `data/feedback/feedback_ratings.csv` (git 제외). 실행할 때마다 합치므로 로그 기간이 겹쳐도 중복되지 않음 |
-| 트리거 | 현재 모델이 아직 학습하지 않은 피드백 ≥ 50건 (`config.RETRAIN_MIN_NEW_FEEDBACK`, `--force` 로 무시) |
-| 학습 | 현재 모델과 같은 종류·하이퍼파라미터로 `train.csv + 피드백 전체` 재학습 |
+| 분할 | 누적 피드백을 (유저, 영화) 쌍의 **해시로 학습용 70% / 평가용 30%** 로 고정 분할(`config.FEEDBACK_EVAL_PCT`, `--eval-pct`). 같은 쌍은 언제나 같은 쪽이라 평가용 평점은 이후 어떤 재학습에도 학습에 쓰이지 않고, 피드백이 늘어도 기존 쌍의 소속이 바뀌지 않는다 |
+| 트리거 | 현재 모델이 아직 학습하지 않은 **학습용** 피드백 ≥ 50건 (`config.RETRAIN_MIN_NEW_FEEDBACK`, `--force` 로 무시). 평가용은 세지 않는다 |
+| 학습 | 현재 모델과 같은 종류·하이퍼파라미터로 `train.csv + 학습용 피드백` 재학습 |
 | 게이트 | **고정 `test.csv`**(피드백 미포함)로 현재/후보 RMSE 비교. 후보가 0.002 넘게 나빠지면 교체 안 함 (종료 코드 2) |
+| 피드백 기준 비교 | **학습에 쓰지 않은 평가용 피드백**으로 현재/후보의 RMSE·MAE, 같은 행끼리의 오차 변화(MAE 변화 ± 표준오차), 후보가 더 정확/더 나쁨/같음 건수를 출력. 교체 판단에는 쓰지 않는 보고용. 건수가 30 미만이거나 변화가 표준오차의 2배 안이면 그렇게 경고한다. 결과는 후보 `metrics.json` 의 `retrain.feedback_eval` 에도 남는다 |
 | 교체 | 후보는 `artifacts/candidates/<버전>/` 에 항상 보관. 통과하면 이전 모델을 `artifacts/previous/<버전>/` 에 백업 후 `model.joblib`·`metrics.json` 교체. 기록은 `artifacts/retrain_history.jsonl` |
 
-- **게이트의 한계:** 피드백은 몇십~몇백 건이라 고정 test RMSE 는 거의 안 움직인다. 이 게이트는 "좋아졌는가"가 아니라 "나빠지지 않았는가"를 본다. 피드백 효과 자체는 로그의 `abs_error` 평균(운영 중 실제 오차)을 시간순으로 비교해서 따로 봐야 한다.
+- **게이트의 한계:** 피드백은 몇십~몇백 건이라 고정 test RMSE 는 거의 안 움직인다. 이 게이트는 "좋아졌는가"가 아니라 "나빠지지 않았는가"를 본다. 피드백 효과는 위 "피드백 기준 비교"(평가용 피드백의 전/후 오차)로 본다.
+- **피드백 비교의 한계:** 평가용은 전체 피드백의 30% 라서 건수가 적으면 우연일 수 있다(표준오차를 같이 본다). 평가용 피드백은 학습에서 영구히 빠지므로 그만큼 학습 데이터가 줄어든다. 피드백의 유저는 팀원이 고른 MovieLens 유저 번호이고 사람 취향이 아니다(로그인 없음). 모델이 이미 아는 패턴(영화 평균 + 유저 성향)으로 만든 평점은 새로 배울 정보가 없어 효과가 나오지 않는다. 현재 모델이 다른 평가용 비율로 학습됐다면 `feedback_eval_warning` 이 뜬다.
 - **서버 반영:** 서버는 시작할 때 모델을 한 번 읽으므로 교체 후 서버(컨테이너)를 다시 시작해야 한다. 서버의 `exclude_seen`은 새 모델의 행렬을 쓰지만, `/users/{id}/history`·`actual_rating` 표시는 `data/processed/*.csv` 기준이라 피드백이 보이지 않는다.
-- **배포 스크립트와의 관계:** `scripts/deploy-ec2.sh` 는 배포할 때마다 `train.py` 로 모델을 원본 데이터 기준으로 다시 만든다. 이때 `metrics.json` 의 `retrain` 항목이 사라져 피드백이 다시 "새 것"이 되므로, 배포 직후 `retrain.py` 를 돌리면 누적 피드백이 다시 반영된다. 배포 파이프라인에 넣는 것은 아직 안 했다 TODO(확인 필요): 배포 대상·권한 확정 후.
+- **배포 스크립트와의 관계:** `scripts/deploy-ec2.sh` 는 배포할 때마다 `train.py` 로 모델을 원본 데이터 기준으로 다시 만든다. 이때 `metrics.json` 의 `retrain` 항목이 사라져 피드백이 다시 "새 것"이 되므로, `train.py` 직후 `retrain.py` 를 다시 돌려야 누적 피드백이 반영된다. `deploy-ec2.sh` 가 서버의 `~/recsys-log/logs/requests.jsonl` 이 있으면 `train.py` 다음에 `retrain.py` 를 실행하도록 연결했고(재학습이 보류·거절돼도 배포는 계속, 결과 표는 배포 로그에 남음), 컨테이너의 `/app/logs` 를 그 폴더에 연결해 재배포해도 기록이 남는다. 서버에서의 실제 실행은 아직 확인하지 못했다.
 - **`/feedback` 로그 변경:** 이제 `user_id` 도 함께 남긴다(guest 는 `null`). 이전에 쌓인 로그는 `user_id` 가 없어 요청 이벤트와 조인된다.
-- 확인: `pytest recsys/tests` → 53 passed. 실제 로그(`logs/requests.jsonl`, 피드백 11건)로 `--dry-run --force`: 중복 7건·guest 2건 제외, 사용 가능 2건. 현재 모델 RMSE 0.9051 이 `metrics.json` 과 일치.
+- 확인: `pytest recsys/tests` → 59 passed (평가용 분할·피드백 비교 테스트 포함). 실제 로그(`logs/requests.jsonl`, 피드백 11건)로 `--dry-run --force`: 중복 7건·guest 2건 제외, 사용 가능 2건. 현재 모델 RMSE 0.9051 이 `metrics.json` 과 일치.
 
 
 {
