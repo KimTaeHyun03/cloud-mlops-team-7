@@ -36,3 +36,9 @@ GUEST_MIN_ITEM_RATINGS = 50  # 내 평점 추천 후보로 쓸 영화의 최소 
 FOLDIN_RIDGE = 0.06        # 취향 벡터 계산 규제 (영화 벡터 크기에 맞춘 값, 평점이 적을 때 과대 추정 방지)
 FOLDIN_MEAN_PRIOR = 2.0    # 내 평균 성향을 전체 평균 쪽으로 당기는 가상 평점 수
 GUEST_SIMILAR_USERS = 5    # 화면에 보여줄 "비슷한 유저" 수
+
+# 피드백 로그 재학습 (recsys/retrain.py)
+FEEDBACK_DIR = ROOT / "data" / "feedback"
+FEEDBACK_STORE_PATH = FEEDBACK_DIR / "feedback_ratings.csv"   # 지금까지 모은 (유저, 영화, 실제 평점). 누적·중복 제거
+RETRAIN_MIN_NEW_FEEDBACK = 50        # 현재 모델이 아직 학습하지 않은 피드백이 이 개수 이상일 때만 재학습
+RETRAIN_MAX_RMSE_REGRESSION = 0.002  # 고정 test RMSE 가 현재 모델보다 이 값 넘게 나빠지면 교체하지 않음

@@ -38,9 +38,9 @@ class ResultRegistry:
     def __init__(self, size: int = REGISTRY_SIZE):
         self.size, self._d, self._lock = size, OrderedDict(), threading.Lock()
 
-    def put(self, request_id: str, predictions: dict) -> None:
+    def put(self, request_id: str, predictions: dict, user_id: int | None = None) -> None:
         with self._lock:
-            self._d[request_id] = predictions
+            self._d[request_id] = {"predictions": predictions, "user_id": user_id}   # 내 평점 추천(guest)은 user_id 없음
             while len(self._d) > self.size:
                 self._d.popitem(last=False)
 
@@ -129,15 +129,17 @@ def _predictions(items: list) -> dict:
 def feedback(req: FeedbackRequest):
     """사용자가 확인한 실제 평점을 그 결과를 만든 request_id 에 연결해 로그로 남긴다 (보상 신호).
     같은 (request_id, movie_id) 를 여러 번 보내면 가장 늦은 timestamp 의 기록을 쓴다."""
-    predictions = registry.get(req.request_id)
-    if predictions is None:
+    entry = registry.get(req.request_id)
+    if entry is None:
         raise HTTPException(status_code=404, detail="알 수 없는 request_id 입니다 (서버를 다시 시작했거나 오래된 요청)")
+    predictions = entry["predictions"]
     if req.movie_id not in predictions:
         raise HTTPException(status_code=422, detail="이 요청의 결과에 없는 영화입니다")
     predicted = predictions[req.movie_id]
     reward = 1.0 if req.rating >= config.RELEVANT_THRESHOLD else 0.0
+    # user_id 를 같이 남긴다: 재학습(recsys/retrain.py)이 요청 로그와 조회 기간이 어긋나도 (유저, 영화, 평점)을 만들 수 있게
     log_request(req_logger, event="feedback", feedback_id=uuid.uuid4().hex[:12], request_id=req.request_id,
-                movie_id=req.movie_id, actual_rating=req.rating, predicted_rating=predicted,
+                user_id=entry["user_id"], movie_id=req.movie_id, actual_rating=req.rating, predicted_rating=predicted,
                 abs_error=round(abs(predicted - req.rating), 3), reward=reward)
     return {"request_id": req.request_id, "movie_id": req.movie_id, "actual_rating": req.rating,
             "predicted_rating": predicted, "reward": reward, "logged": True}
@@ -163,7 +165,7 @@ def predict(req: PredictRequest, request: Request):
         request.state.log_fields.update(
             model_version=out["model_version"], model_ms=out["latency_ms"],
             prediction={"predicted_rating": out["predicted_rating"], "fallback": out["fallback"]})
-        registry.put(request.state.request_id, {req.movie_id: out["predicted_rating"]})
+        registry.put(request.state.request_id, {req.movie_id: out["predicted_rating"]}, req.user_id)
         return {**out, "request_id": request.state.request_id}
     except InputError as e:
         request.state.log_fields["error_detail"] = str(e)
@@ -178,7 +180,7 @@ def recommend(req: RecommendRequest, request: Request):
         "model_version": out["model_version"], "model_ms": out["latency_ms"],
         "prediction": {"fallback": out.get("fallback"), "n_items": len(out["items"]),
                        "items": _ranked(out["items"])}}
-    registry.put(request.state.request_id, _predictions(out["items"]))
+    registry.put(request.state.request_id, _predictions(out["items"]), req.user_id)
     return {**out, "request_id": request.state.request_id}
 
 

@@ -6,3 +6,4 @@ data/processed/
 .pytest_cache/
 logs/
 dist/
+data/feedback/
